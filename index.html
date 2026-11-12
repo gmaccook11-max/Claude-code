@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>RE-Mind</title>
+<meta name="description" content="Daily checklist, school assignments, grades and reminders that keep you accountable.">
+<meta name="theme-color" content="#4f46e5">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="RE-Mind">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <h1><span class="brand-re">RE</span>-Mind</h1>
+  <span id="top-date"></span>
+</header>
+
+<main id="view" tabindex="-1"></main>
+
+<nav class="tabs" aria-label="Sections">
+  <button data-tab="today"><svg viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg><span>Today</span></button>
+  <button data-tab="plan"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg><span>Plan</span></button>
+  <button data-tab="school"><svg viewBox="0 0 24 24"><path d="M2 9l10-5 10 5-10 5z"/><path d="M6 11.5V17c3 2.5 9 2.5 12 0v-5.5"/></svg><span>School</span></button>
+  <button data-tab="report"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Report</span></button>
+  <button data-tab="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg><span>Settings</span></button>
+</nav>
+
+<dialog id="sheet">
+  <form method="dialog" id="sheet-form">
+    <h2 id="sheet-title"></h2>
+    <div id="sheet-fields"></div>
+    <div class="sheet-actions">
+      <button type="button" class="btn danger" id="sheet-delete" hidden>Delete</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn ghost" id="sheet-cancel">Cancel</button>
+      <button type="submit" class="btn primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" role="status" aria-live="polite"></div>
+<input type="file" id="ics-file" accept=".ics,text/calendar" hidden>
+<script src="app.js"></script>
+</body>
+</html>
