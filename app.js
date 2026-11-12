@@ -33,10 +33,18 @@ const QUOTES = [
 ];
 const quote = () => QUOTES[Math.floor(Math.random() * QUOTES.length)];
 
+/* ---------- school systems ---------- */
+const PROVIDERS = {
+  schoology: { name: 'Schoology', steps: 'On the Schoology website (not the phone app), open Calendar and choose Export or Share. You can also find it under Settings, Account Settings, "Share your Schoology calendar". Turn sharing on and copy the link it gives you.' },
+  canvas: { name: 'Canvas', steps: 'On the Canvas website, open Calendar, choose "Calendar Feed" at the bottom of the right-hand side, and copy the link.' },
+  google: { name: 'Google Classroom', steps: 'Open Google Calendar on a computer, go to Settings, pick a class calendar on the left, and copy "Secret address in iCal format". Add one connection for each class.' },
+  other: { name: 'Other school system', steps: 'Open the calendar in your school system and look for Export, Subscribe or iCal. Copy the link it gives you. If it only offers a download, use "Import .ics file" instead.' }
+};
+
 /* ---------- state ---------- */
 const KEY = 'remind.v1';
 const DEFAULTS = {
-  daily: [], dailyLog: {}, tasks: [], assignments: [], classes: [], sent: {},
+  daily: [], dailyLog: {}, tasks: [], assignments: [], classes: [], feeds: [], sent: {},
   settings: { name: '', notif: false, morning: '07:30', evening: '20:00', nagMins: 30, motivate: true }
 };
 let S = load();
@@ -155,7 +163,7 @@ const views = {
       <button class="${schoolSeg === 'grades' ? 'on' : ''}" data-act="seg" data-seg="grades">Grades</button></div>`;
     if (schoolSeg === 'assignments') {
       const m = missing(), u = upcoming(), d = turnedIn().slice(0, 20);
-      h += `<div class="btn-row" style="margin:0 0 14px"><button class="btn primary" data-act="add-assignment">+ Add assignment</button><button class="btn" data-act="import-file">Import from school</button></div>`;
+      h += `<div class="btn-row" style="margin:0 0 14px"><button class="btn primary" data-act="add-assignment">+ Add assignment</button><button class="btn" data-act="school-sync">${S.feeds.length ? 'Sync school' : 'Connect school'}</button></div>`;
       if (m.length) h += `<section class="card"><h2>Missing <span class="badge bad">${m.length}</span></h2><ul class="list">${m.map(assignmentRow).join('')}</ul></section>`;
       h += `<section class="card"><h2>Upcoming</h2>${u.length ? `<ul class="list">${u.map(assignmentRow).join('')}</ul>` : '<p class="empty">Nothing upcoming. Add an assignment or import your school calendar.</p>'}</section>`;
       if (d.length) h += `<section class="card"><h2>Turned in</h2><ul class="list">${d.map(assignmentRow).join('')}</ul></section>`;
@@ -217,9 +225,14 @@ const views = {
           ${[[0, 'Once only'], [15, 'Every 15 min'], [30, 'Every 30 min'], [60, 'Every hour']].map(([v, l]) => `<option value="${v}" ${+st.nagMins === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         <label class="setting">Motivational messages<input type="checkbox" data-set="motivate" ${st.motivate ? 'checked' : ''}></label></div></section>
       <section class="card"><h2>School data</h2>
-        <p class="sub">Import assignments from your school's calendar feed. Canvas, Google Classroom (through Google Calendar), Schoology and most others can export one as an .ics file or link.</p>
+        <p class="sub">Connect your school calendar and RE-Mind pulls in your assignments each time you open it. Works with Schoology, Canvas, Google Classroom and anything else that offers a calendar link.</p>
+        ${S.feeds.length ? `<ul class="list" style="margin-top:8px">${S.feeds.map(f => `<li class="row"><div class="body"><span class="title">${esc(PROVIDERS[f.provider]?.name || 'School calendar')}</span>
+          <span class="meta ${f.lastError ? 'bad' : ''}">${f.lastError ? esc(f.lastError) : f.lastSync ? 'Last synced ' + fmtDue(localInput(new Date(f.lastSync))) : 'Not synced yet'}</span></div>
+          <button class="btn small danger" data-act="remove-feed" data-id="${f.id}">Remove</button></li>`).join('')}</ul>` : ''}
+        <button class="btn block primary" data-act="connect">Connect a school calendar</button>
+        ${S.feeds.length ? '<button class="btn block" data-act="sync">Sync now</button>' : ''}
         <button class="btn block" data-act="import-file">Import .ics file</button>
-        <button class="btn block" data-act="import-url">Import from calendar link</button></section>
+        <p class="sub" style="margin-top:10px">Calendar links carry assignments and due dates, not grades. Enter grades under School, Grades.</p></section>
       <section class="card"><h2>Your data</h2><p class="sub">Everything is stored only on this device.</p>
         <div class="btn-row"><button class="btn" data-act="export">Export backup</button><button class="btn danger" data-act="reset">Erase everything</button></div></section>`;
   }
@@ -237,12 +250,16 @@ function render() {
 
 /* ---------- sheet (add / edit forms) ---------- */
 let sheetCtx = null;
-function openSheet({ title, fields, onSave, onDelete }) {
-  sheetCtx = { onSave, onDelete };
+function openSheet({ title, fields, onSave, onDelete, help, after }) {
+  sheetCtx = { onSave, onDelete, help, after };
   $('#sheet-title').textContent = title;
-  $('#sheet-fields').innerHTML = fields.map(f => `<label class="field"><span>${esc(f.label)}</span>
+  $('#sheet-fields').innerHTML = fields.map(f => f.options
+    ? `<label class="field"><span>${esc(f.label)}</span><select name="${f.name}">${f.options.map(([v, l]) => `<option value="${v}" ${v === f.value ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`
+    : `<label class="field"><span>${esc(f.label)}</span>
     <input name="${f.name}" type="${f.type || 'text'}" value="${esc(f.value ?? '')}" ${f.required ? 'required' : ''}
-    ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''} ${f.type === 'number' ? 'min="0" max="150" step="0.1" inputmode="decimal"' : ''} ${f.type === 'text' || !f.type ? 'maxlength="120" autocomplete="off"' : ''}></label>`).join('');
+    ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''} ${f.type === 'number' ? 'min="0" max="150" step="0.1" inputmode="decimal"' : ''} ${f.type === 'text' || !f.type ? 'maxlength="120" autocomplete="off"' : ''}></label>`).join('') + '<p class="sub" id="sheet-help" style="margin:0 0 14px"></p>';
+  const showHelp = () => { $('#sheet-help').textContent = help ? help(Object.fromEntries(new FormData($('#sheet-form')))) : ''; };
+  $('#sheet-fields').onchange = showHelp; showHelp();
   $('#sheet-delete').hidden = !onDelete;
   $('#sheet').showModal();
 }
@@ -252,6 +269,7 @@ $('#sheet-form').addEventListener('submit', e => {
   for (const k in data) data[k] = data[k].trim();
   sheetCtx.onSave(data);
   $('#sheet').close(); save(); render(); tick();
+  sheetCtx.after?.();
 });
 $('#sheet-cancel').addEventListener('click', () => $('#sheet').close());
 $('#sheet-delete').addEventListener('click', () => { sheetCtx.onDelete(); $('#sheet').close(); save(); render(); });
@@ -315,6 +333,24 @@ function classSheet(c) {
   });
 }
 
+function connectSheet() {
+  let feed;
+  openSheet({
+    title: 'Connect a school calendar',
+    fields: [
+      { name: 'provider', label: 'School system', value: 'schoology', options: Object.entries(PROVIDERS).map(([k, v]) => [k, v.name]) },
+      { name: 'url', label: 'Calendar link', type: 'url', required: true, placeholder: 'https://… or webcal://…' }
+    ],
+    help: d => PROVIDERS[d.provider].steps,
+    onSave: d => {
+      const url = d.url.replace(/^webcals?:/i, 'https:');
+      feed = S.feeds.find(f => f.url === url);
+      if (!feed) { feed = { id: uid(), provider: d.provider, url }; S.feeds.push(feed); } else feed.provider = d.provider;
+    },
+    after: () => syncAll(false, [feed])
+  });
+}
+
 /* ---------- actions ---------- */
 const byId = (list, id) => list.find(x => x.id === id);
 const actions = {
@@ -356,16 +392,11 @@ const actions = {
     toast('Test sent');
   },
   'import-file': () => $('#ics-file').click(),
-  'import-url': async () => {
-    const url = prompt('Paste your school calendar link (ends in .ics):');
-    if (!url) return;
-    try {
-      const r = await fetch(url.trim().replace(/^webcal:/, 'https:'));
-      if (!r.ok) throw new Error(r.status);
-      importIcs(await r.text());
-    } catch (e) {
-      toast('That link could not be read from the app. Download the .ics file and use "Import .ics file".');
-    }
+  'connect': () => connectSheet(),
+  'sync': () => syncAll(false),
+  'school-sync': () => S.feeds.length ? syncAll(false) : connectSheet(),
+  'remove-feed': el => {
+    if (confirm('Remove this school connection? Assignments already imported stay in the app.')) S.feeds = S.feeds.filter(f => f.id !== el.dataset.id);
   },
   'export': () => {
     const a = document.createElement('a');
@@ -408,16 +439,17 @@ function parseIcsDate(v) {
 }
 function parseIcs(text) {
   const lines = text.replace(/\r\n?/g, '\n').replace(/\n[ \t]/g, '').split('\n');
-  const out = []; let ev = null;
+  const out = []; let ev = null; out.calName = '';
   const clean = s => s.replace(/\\n/gi, ' ').replace(/\\([,;\\])/g, '$1').trim();
   for (const line of lines) {
     if (line === 'BEGIN:VEVENT') ev = {};
     else if (line === 'END:VEVENT') { if (ev && ev.title && ev.due) out.push(ev); ev = null; }
+    else if (!ev && /^X-WR-CALNAME[:;]/i.test(line)) out.calName = clean(line.slice(line.indexOf(':') + 1)).slice(0, 120);
     else if (ev) {
       const i = line.indexOf(':'); if (i < 0) continue;
       const name = line.slice(0, i).split(';')[0].toUpperCase(), val = line.slice(i + 1);
       if (name === 'SUMMARY') {
-        const t = clean(val); const m = t.match(/^(.*)\s\[([^\]]+)\]$/);
+        const t = clean(val).replace(/^Assignment:\s*/i, ''); const m = t.match(/^(.*)\s\[([^\]]+)\]$/);
         ev.title = (m ? m[1] : t).slice(0, 120); if (m) ev.course = m[2].slice(0, 120);
       } else if (name === 'UID') ev.uid = val.trim();
       else if (name === 'DTSTART' || (name === 'DTEND' && !ev.due) || name === 'DUE') { const d = parseIcsDate(val.trim()); if (d && !isNaN(d)) ev.due = d; }
@@ -425,23 +457,61 @@ function parseIcs(text) {
   }
   return out;
 }
-function importIcs(text) {
+function importIcs(text, feed) {
   const cutoff = addDays(new Date(), -14);
-  const events = parseIcs(text).filter(e => e.due >= cutoff);
+  const parsed = parseIcs(text);
+  const events = parsed.filter(e => e.due >= cutoff);
   let added = 0, updated = 0;
   for (const e of events) {
+    if (!e.course && feed?.provider === 'google') e.course = parsed.calName;
     const key = e.uid || `${e.title}|${localInput(e.due)}`;
     const old = S.assignments.find(a => a.uid === key);
     if (old) { old.title = e.title; old.due = localInput(e.due); if (e.course) old.course = e.course; updated++; }
     else { S.assignments.push({ id: uid(), uid: key, title: e.title, course: e.course || '', due: localInput(e.due), status: 'todo', late: false, source: 'ics' }); added++; }
   }
-  save(); render(); tick();
-  toast(events.length ? `Imported ${added} new, updated ${updated}` : 'No current assignments found in that calendar');
+  return { added, updated };
 }
 $('#ics-file').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
-  importIcs(await f.text()); e.target.value = '';
+  const r = importIcs(await f.text()); e.target.value = '';
+  save(); render(); tick();
+  toast(r.added + r.updated ? `Imported ${r.added} new, updated ${r.updated}` : 'No current assignments found in that file');
 });
+
+/* ---------- school calendar sync ---------- */
+// Tries the link directly first. Most school sites block that from a browser, so the
+// fallback is this app's own relay at api/feed (see functions/api/feed.js).
+async function fetchFeed(url) {
+  const get = async u => {
+    const r = await fetch(u, { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const t = await r.text();
+    if (!t.slice(0, 2000).includes('BEGIN:VCALENDAR')) throw new Error('Not a calendar');
+    return t;
+  };
+  try { return await get(url); } catch (e) { return await get('api/feed?url=' + encodeURIComponent(url)); }
+}
+let syncing = false;
+async function syncAll(quiet, feeds = S.feeds) {
+  if (syncing || !feeds.length) return;
+  syncing = true;
+  if (!quiet) toast('Syncing with school…');
+  let added = 0, updated = 0, failed = 0;
+  for (const f of feeds) {
+    f.lastTry = Date.now();
+    try {
+      const r = importIcs(await fetchFeed(f.url), f);
+      added += r.added; updated += r.updated; f.lastSync = Date.now(); f.lastError = '';
+    } catch (e) { failed++; f.lastError = navigator.onLine ? 'Could not read this link' : 'Offline, will retry'; }
+  }
+  syncing = false;
+  save(); tick();
+  if (!$('#sheet').open) render();
+  if (quiet) { if (added) toast(`${added} new assignment${added > 1 ? 's' : ''} from school`); return; }
+  toast(failed ? 'That link could not be read from here. Download the calendar as a file and use "Import .ics file" instead.'
+    : `School synced: ${added} new, ${updated} updated`);
+}
+const autoSync = () => { if (navigator.onLine && S.feeds.some(f => Date.now() - (f.lastTry || 0) > HOUR)) syncAll(true); };
 
 /* ---------- reminders ---------- */
 const canNotify = () => 'Notification' in window && Notification.permission === 'granted' && S.settings.notif;
@@ -496,10 +566,11 @@ function tick() {
 let lastDay = ymd();
 function refresh() {
   if (ymd() !== lastDay || tab === 'today') { lastDay = ymd(); if (!$('#sheet').open) render(); }
-  tick();
+  tick(); autoSync();
 }
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 render();
 tick();
+autoSync();
 setInterval(refresh, 30e3);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });

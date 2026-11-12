@@ -16,4 +16,14 @@ No build step. Serve the folder over HTTP and open it:
 python3 -m http.server 8000
 ```
 
-To use it on a phone, host the folder on any HTTPS static host (for example GitHub Pages), open the link, and choose "Add to Home Screen". All data stays on the device.
+## School data
+
+In Settings, choose "Connect a school calendar", pick Schoology, Canvas, Google Classroom or Other, and paste the calendar link from your school system. RE-Mind then syncs assignments each time it opens. Any system that can export an .ics file also works through "Import .ics file".
+
+Most school sites block a web page from reading their calendar link directly, so the app falls back to a small relay at `api/feed` (`functions/api/feed.js`). The relay runs automatically when the app is hosted on Cloudflare Pages. On hosts without it (such as GitHub Pages), use the file import.
+
+Calendar links carry assignments and due dates only. Grades are entered by hand.
+
+## Put it on a phone
+
+Host the folder on any HTTPS static host (for example GitHub Pages), open the link, and choose "Add to Home Screen". All data stays on the device.

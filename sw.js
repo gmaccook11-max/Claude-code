@@ -1,4 +1,4 @@
-const CACHE = 're-mind-v1';
+const CACHE = 're-mind-v2';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-180.png'];
 
 self.addEventListener('install', e => {
@@ -11,7 +11,7 @@ self.addEventListener('activate', e => {
 // Network first so updates show up straight away; cache keeps the app working offline.
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
-  if (e.request.method !== 'GET' || url.origin !== location.origin) return;
+  if (e.request.method !== 'GET' || url.origin !== location.origin || url.pathname.includes('/api/')) return;
   e.respondWith(
     fetch(e.request).then(res => {
       if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); }
