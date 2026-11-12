@@ -90,9 +90,9 @@ const PROVIDERS = {
 /* ---------- state ---------- */
 const KEY = 'remind.v1';
 const DEFAULTS = {
-  daily: [], dailyLog: {}, tasks: [], assignments: [], classes: [], feeds: [], sent: {},
+  daily: [], dailyLog: {}, tasks: [], assignments: [], classes: [], feeds: [], sent: {}, acked: {},
   profile: { done: false, goals: [], goalText: '', why: '', obstacles: [], gradeGoal: null, tone: 'encouraging' },
-  settings: { name: '', notif: false, morning: '07:30', evening: '20:00', nagMins: 30, motivate: true }
+  settings: { name: '', notif: false, morning: '07:30', evening: '20:00', nagMins: 30, motivate: true, callouts: true }
 };
 let S = load();
 let tab = 'today';
@@ -136,6 +136,63 @@ const turnedIn = () => S.assignments.filter(a => a.status === 'done').sort((a, b
 const lateOnes = () => turnedIn().filter(a => a.late);
 const belowGoal = () => S.classes.filter(c => c.goal != null && c.grade != null && c.grade < c.goal);
 const letter = g => g >= 90 ? 'A' : g >= 80 ? 'B' : g >= 70 ? 'C' : g >= 60 ? 'D' : 'F';
+
+/* ---------- call-outs ---------- */
+// Spots slipping grades and work that is not being turned in, and says so plainly in the
+// tone the person chose. Each one stays on the Today screen until they tap "I'm on it".
+function callouts() {
+  if (!S.settings.callouts) return [];
+  const tone = S.profile.tone, out = [];
+  const say = (enc, tough, facts) => tone === 'tough' ? tough : tone === 'facts' ? facts : enc;
+  const names = list => list.slice(0, 3).map(a => a.title).join(', ') + (list.length > 3 ? ` and ${list.length - 3} more` : '');
+  const n1 = x => +x.toFixed(2);
+
+  for (const c of S.classes) {
+    const h = c.history || [];
+    if (h.length < 2 || c.grade == null) continue;
+    const cur = h[h.length - 1].grade, prev = h[h.length - 2].grade, drop = n1(prev - cur);
+    if (drop < 0.5) continue;
+    const twice = h.length > 2 && h[h.length - 3].grade > prev;
+    const under = c.goal != null && cur < c.goal ? (prev >= c.goal ? ` That puts it below your goal of ${c.goal}%.` : ` It is ${n1(c.goal - cur)} below your goal of ${c.goal}%.`) : '';
+    out.push({
+      key: `grade|${c.id}|${cur}`, type: 'grade',
+      title: `${c.name} is going down`,
+      text: `${c.name} went from ${prev}% to ${cur}%, down ${drop}${twice ? ', and that is the second drop in a row' : ''}.${under} ` + say(
+        'You can win that back. Find out what pulled it down and fix that first.',
+        'That does not fix itself. What are you doing about it today?',
+        '').trim()
+    });
+  }
+
+  const miss = missing();
+  if (miss.length) {
+    const oldest = Math.floor((new Date() - new Date(miss[0].due)) / (24 * 3600e3));
+    out.push({
+      key: `missing|${ymd()}|${miss.length}`, type: 'missing',
+      title: `${miss.length} assignment${miss.length > 1 ? 's' : ''} not turned in`,
+      text: `${names(miss)}.${oldest >= 2 ? ` The oldest has been missing for ${oldest} days.` : ''} ` + say(
+        'Turn one in today, even late. Late beats a zero.',
+        'Every day you wait it gets worse. Pick one and finish it now.',
+        '').trim()
+    });
+  }
+
+  const week = localInput(addDays(new Date(), -7));
+  const late = lateOnes().filter(a => (a.doneAt || '') >= week);
+  if (late.length >= 2) out.push({
+    key: `late|${late.length}|${late[0].doneAt}`, type: 'late',
+    title: `${late.length} things turned in late this week`,
+    text: `${names(late)}. ` + say(
+      'It is turning into a habit. Start the next one a day earlier.',
+      'That is a pattern, not bad luck. Start the next one a day earlier.',
+      '').trim()
+  });
+
+  const why = S.profile.why && tone !== 'facts' ? ` You said this matters because: "${S.profile.why}".` : '';
+  const who = S.settings.name ? `${S.settings.name}, ` : '';
+  return out.map(c => ({ ...c, text: (c.text + why).trim(), title: who + c.title }));
+}
+const activeCallouts = () => callouts().filter(c => !S.acked[c.key]);
 
 /* ---------- views ---------- */
 function ring(done, total) {
@@ -183,7 +240,10 @@ const views = {
     let h = `<section class="card hero">${ring(st.done, st.total)}<div><h2>${hello}${name}</h2><p class="sub">${status}</p>
       ${S.profile.why ? `<p class="sub why">Your why: ${esc(S.profile.why)}</p>` : ''}
       <p class="sub">${streak() ? `🔥 ${streak()}-day streak` : 'Finish the whole list to start a streak.'}</p></div></section>`;
-    if (miss.length) h += `<div class="alert bad"><b>${miss.length} missing assignment${miss.length > 1 ? 's' : ''}</b>${miss.slice(0, 3).map(a => esc(a.title)).join(', ')}${miss.length > 3 ? ' and more' : ''}. Turn them in, even late.</div>`;
+    const calls = activeCallouts();
+    h += calls.map(c => `<div class="callout" role="alert"><b>${esc(c.title)}</b><p>${esc(c.text)}</p>
+      <button class="btn small" data-act="ack-callout" data-key="${esc(c.key)}">I'm on it</button></div>`).join('');
+    if (miss.length && !calls.some(c => c.type === 'missing')) h += `<div class="alert bad"><b>${miss.length} missing assignment${miss.length > 1 ? 's' : ''}</b>${miss.slice(0, 3).map(a => esc(a.title)).join(', ')}${miss.length > 3 ? ' and more' : ''}.</div>`;
     if (y.total && y.left.length) h += `<div class="alert warn"><b>Yesterday you skipped ${y.left.length} of ${y.total}</b>${y.left.map(i => esc(i.title)).join(', ')}. Make today count.</div>`;
     h += `<section class="card"><div class="card-head"><h2>Daily checklist</h2><button class="btn small" data-act="add-daily">+ Add</button></div>
       ${st.total ? `<ul class="list">${st.items.map(i => `<li class="row ${log[i.id] ? 'done' : ''}">
@@ -290,7 +350,8 @@ const views = {
         <label class="setting">Evening check-in<input type="time" data-set="evening" value="${st.evening}"></label>
         <label class="setting">Keep nagging until done<select data-set="nagMins">
           ${[[0, 'Once only'], [15, 'Every 15 min'], [30, 'Every 30 min'], [60, 'Every hour']].map(([v, l]) => `<option value="${v}" ${+st.nagMins === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-        <label class="setting">Motivational messages<input type="checkbox" data-set="motivate" ${st.motivate ? 'checked' : ''}></label></div></section>
+        <label class="setting">Motivational messages<input type="checkbox" data-set="motivate" ${st.motivate ? 'checked' : ''}></label>
+        <label class="setting">Call me out when I slip<input type="checkbox" data-set="callouts" ${st.callouts ? 'checked' : ''}></label></div></section>
       <section class="card"><h2>School data</h2>
         <p class="sub">Connect your school calendar and RE-Mind pulls in your assignments each time you open it. Works with Schoology, Canvas, Google Classroom and anything else that offers a calendar link.</p>
         ${S.feeds.length ? `<ul class="list" style="margin-top:8px">${S.feeds.map(f => `<li class="row"><div class="body"><span class="title">${esc(PROVIDERS[f.provider]?.name || 'School calendar')}</span>
@@ -310,6 +371,7 @@ function render() {
   document.querySelectorAll('.tabs button').forEach(b => {
     const on = b.dataset.tab === tab;
     b.classList.toggle('on', on);
+    if (b.dataset.tab === 'today') b.classList.toggle('alerting', activeCallouts().length > 0);
     on ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current');
   });
   $('#top-date').textContent = new Date().toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
@@ -653,6 +715,7 @@ const actions = {
   'add-class': () => classSheet(),
   'quick-assignments': () => quickAssignmentsSheet(),
   'quick-grades': () => quickGradesSheet(),
+  'ack-callout': el => { S.acked[el.dataset.key] = Date.now(); toast(S.profile.tone === 'tough' ? 'Good. Prove it.' : 'Good. Go handle it.'); },
   'edit-profile': () => startOnboarding(),
   'scan-grades': () => $('#grade-shots').click(),
   'edit-class': el => classSheet(byId(S.classes, el.dataset.id)),
@@ -811,10 +874,10 @@ async function show(title, body, tag) {
   } catch (e) { /* fall through */ }
   try { new Notification(title, opts); } catch (e) { /* not available */ }
 }
-function remind(key, title, body) {
+function remind(key, title, body, plain) {
   if (S.sent[key] || !canNotify()) return;
   S.sent[key] = Date.now();
-  show(title, S.settings.motivate ? `${body} ${quote()}`.trim() : body, key);
+  show(title, S.settings.motivate && !plain ? `${body} ${quote()}`.trim() : body, key);
 }
 const HOUR = 3600e3;
 const within = (t, now, ms = HOUR) => now >= t && now - t < ms;
@@ -843,10 +906,12 @@ function tick() {
     if (left <= 2 * HOUR) remind(`a2|${a.id}|${a.due}`, `Due soon: ${a.title}`, `Due at ${fmtTime(a.due.slice(11, 16))}${a.course ? ' for ' + a.course : ''}.`);
     else if (left <= 24 * HOUR) remind(`a24|${a.id}|${a.due}`, `Due tomorrow: ${a.title}`, `Due ${fmtDue(a.due)}${a.course ? ' for ' + a.course : ''}.`);
   }
-  if (miss.length) remind(`missing|${day}|${miss.length}`, `${miss.length} missing assignment${miss.length > 1 ? 's' : ''}`, miss.slice(0, 3).map(a => a.title).join(', ') + '. Turn them in, even late.');
+  if (S.settings.callouts) for (const c of activeCallouts()) remind(`callout|${c.key}`, c.title, c.text, true);
+  else if (miss.length) remind(`missing|${day}|${miss.length}`, `${miss.length} missing assignment${miss.length > 1 ? 's' : ''}`, miss.slice(0, 3).map(a => a.title).join(', ') + '. Turn them in, even late.');
 
   const old = Date.now() - 14 * 24 * HOUR;
   for (const k in S.sent) if (S.sent[k] < old) delete S.sent[k];
+  for (const k in S.acked) if (S.acked[k] < old - 76 * 24 * HOUR) delete S.acked[k];
   if (Object.keys(S.sent).length !== before) save();
 }
 

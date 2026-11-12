@@ -203,3 +203,11 @@ dialog#sheet::backdrop { background: rgba(0, 0, 0, .45); }
 .chip.big b, .chip.big small { display: block; }
 .chip.big small { color: var(--muted); font-weight: 400; margin-top: 2px; }
 .why { font-style: italic; }
+
+.callout { background: var(--bad); color: #fff; border-radius: var(--radius); padding: 14px; margin-bottom: 14px; }
+.callout b { display: block; font-size: 17px; }
+.callout p { margin: 4px 0 10px; font-size: 15px; }
+.callout .btn { background: #fff; color: #7f1d1d; border-color: #fff; }
+@media (prefers-color-scheme: dark) { .callout { background: #7f1d1d; } }
+.tabs button { position: relative; }
+.tabs button.alerting::after { content: ""; position: absolute; top: 6px; left: calc(50% + 8px); width: 10px; height: 10px; border-radius: 50%; background: var(--bad); border: 2px solid var(--card); }

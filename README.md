@@ -7,6 +7,7 @@ A mobile app (installable web app) that keeps you on top of school and your day.
 - **Assignments** with due dates, missing and late tracking, and import from a school calendar (.ics) feed.
 - **Grades** per class with a goal, trend, and a flag when you fall below goal.
 - **First-run setup** asks your name, goals, reason, obstacles and preferred tone, then uses the answers in reminders, default grade goals and the Report page.
+- **Call-outs** when a grade drops, work is not turned in, or late work becomes a pattern. They stay on the Today screen until acknowledged.
 - **Report** page: streak, on-time rate, missing work, late log, grades below goal.
 
 ## Run it
