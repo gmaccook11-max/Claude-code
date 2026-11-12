@@ -1,4 +1,5 @@
-// School calendar relay for RE-Mind (Cloudflare Pages Function, served at /api/feed).
+// RE-Mind on Cloudflare Workers. The app itself is served from ./public as static
+// assets; this script only answers /api/feed, the school calendar relay.
 //
 // School sites such as Schoology and Canvas do not let a web page read their calendar
 // links directly, so the app asks this relay to fetch the link for it. It only passes
@@ -16,7 +17,7 @@ function allowed(url) {
 
 const fail = (status, message) => new Response(message, { status, headers: { 'content-type': 'text/plain', 'cache-control': 'no-store' } });
 
-export async function onRequestGet({ request }) {
+async function feed(request) {
   let target;
   try { target = new URL(new URL(request.url).searchParams.get('url')); } catch (e) { return fail(400, 'Missing or invalid url'); }
   if (!allowed(target)) return fail(400, 'Only public https calendar links are allowed');
@@ -39,3 +40,11 @@ export async function onRequestGet({ request }) {
 
   return new Response(body, { headers: { 'content-type': 'text/calendar; charset=utf-8', 'cache-control': 'no-store' } });
 }
+
+export default {
+  async fetch(request, env) {
+    const { pathname } = new URL(request.url);
+    if (pathname === '/api/feed' && request.method === 'GET') return feed(request);
+    return env.ASSETS.fetch(request);
+  }
+};

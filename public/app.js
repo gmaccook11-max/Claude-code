@@ -480,7 +480,7 @@ $('#ics-file').addEventListener('change', async e => {
 
 /* ---------- school calendar sync ---------- */
 // Tries the link directly first. Most school sites block that from a browser, so the
-// fallback is this app's own relay at api/feed (see functions/api/feed.js).
+// fallback is this app's own relay at api/feed (see src/worker.js).
 async function fetchFeed(url) {
   const get = async u => {
     const r = await fetch(u, { cache: 'no-store' });
