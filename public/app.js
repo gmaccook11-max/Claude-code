@@ -31,7 +31,53 @@ const QUOTES = [
   'One assignment at a time. You have got this.',
   'Streaks are built on the days you did not feel like it.'
 ];
-const quote = () => QUOTES[Math.floor(Math.random() * QUOTES.length)];
+const TOUGH = [
+  'No excuses. Do it now.',
+  'You said this mattered. Prove it.',
+  'Nobody else is going to do this for you.',
+  'Late is a choice. Choose differently.',
+  'Put the phone down and start.',
+  'You have done harder things than this.',
+  'Comfortable now means stressed later.',
+  'Stop planning to do it. Do it.'
+];
+const GOALS = {
+  grades: { label: 'Raise my grades', line: 'Every assignment you turn in moves your grade toward your goal.' },
+  late: { label: 'Stop turning things in late', line: 'On time today means nothing late on your record.' },
+  missing: { label: 'Stop missing assignments', line: 'Zero missing is the goal. Clear one now.' },
+  habits: { label: 'Build better daily habits', line: 'Your streak is built one tick at a time.' },
+  stress: { label: 'Feel less stressed about school', line: 'Getting it done now is how tonight stays calm.' }
+};
+const OBSTACLES = {
+  procrastination: { label: 'I put things off', tip: 'Start with just five minutes.' },
+  forgetting: { label: 'I forget what is due', tip: 'Do it now, while you are thinking about it.' },
+  distractions: { label: 'My phone distracts me', tip: 'Put the phone face down until this is done.' },
+  busy: { label: 'I am too busy', tip: 'Pick the smallest piece and finish that.' },
+  motivation: { label: 'I do not feel motivated', tip: 'You do not need to feel ready. Start anyway.' }
+};
+const TONES = { encouraging: 'Encouraging', tough: 'Tough love', facts: 'Just the facts' };
+const STARTERS = {
+  grades: ['Check Schoology for new assignments', 'Study or review for 20 minutes'],
+  late: ['Turn in everything due today', 'Check what is due tomorrow'],
+  missing: ['Check what is due tomorrow', 'Check Schoology for new assignments'],
+  habits: ['Pack my bag for tomorrow', 'Read for 20 minutes'],
+  stress: ['Plan tomorrow before bed']
+};
+const pick = list => list[Math.floor(Math.random() * list.length)];
+// A motivational line built from what the person told us at setup: their reason, their
+// goals, what gets in their way, and the tone they asked for.
+function quote() {
+  const p = S.profile;
+  if (p.tone === 'facts') return '';
+  const tough = p.tone === 'tough';
+  const personal = [];
+  if (p.why) personal.push(tough ? `You said you want this: "${p.why}". Act like it.` : `Remember why you started: "${p.why}".`);
+  if (p.goalText) personal.push(tough ? `Your goal, your words: "${p.goalText}". Earn it.` : `Keep going for your goal: "${p.goalText}".`);
+  for (const g of p.goals) if (GOALS[g]) personal.push(GOALS[g].line);
+  for (const o of p.obstacles) if (OBSTACLES[o]) personal.push(OBSTACLES[o].tip);
+  if (personal.length && Math.random() < 0.6) return pick(personal);
+  return pick(tough ? TOUGH : QUOTES);
+}
 
 /* ---------- school systems ---------- */
 const PROVIDERS = {
@@ -45,6 +91,7 @@ const PROVIDERS = {
 const KEY = 'remind.v1';
 const DEFAULTS = {
   daily: [], dailyLog: {}, tasks: [], assignments: [], classes: [], feeds: [], sent: {},
+  profile: { done: false, goals: [], goalText: '', why: '', obstacles: [], gradeGoal: null, tone: 'encouraging' },
   settings: { name: '', notif: false, morning: '07:30', evening: '20:00', nagMins: 30, motivate: true }
 };
 let S = load();
@@ -56,6 +103,7 @@ function load() {
   try { saved = JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { /* start fresh */ }
   const s = { ...structuredClone(DEFAULTS), ...saved };
   s.settings = { ...DEFAULTS.settings, ...(saved.settings || {}) };
+  s.profile = { ...DEFAULTS.profile, ...(saved.profile || {}) };
   return s;
 }
 function save() {
@@ -133,6 +181,7 @@ const views = {
       : st.done === st.total ? 'Everything done today. Nice work.'
       : `${st.total - st.done} left to do today.`;
     let h = `<section class="card hero">${ring(st.done, st.total)}<div><h2>${hello}${name}</h2><p class="sub">${status}</p>
+      ${S.profile.why ? `<p class="sub why">Your why: ${esc(S.profile.why)}</p>` : ''}
       <p class="sub">${streak() ? `🔥 ${streak()}-day streak` : 'Finish the whole list to start a streak.'}</p></div></section>`;
     if (miss.length) h += `<div class="alert bad"><b>${miss.length} missing assignment${miss.length > 1 ? 's' : ''}</b>${miss.slice(0, 3).map(a => esc(a.title)).join(', ')}${miss.length > 3 ? ' and more' : ''}. Turn them in, even late.</div>`;
     if (y.total && y.left.length) h += `<div class="alert warn"><b>Yesterday you skipped ${y.left.length} of ${y.total}</b>${y.left.map(i => esc(i.title)).join(', ')}. Make today count.</div>`;
@@ -197,7 +246,22 @@ const views = {
       ? '<div class="alert warn"><b>Nothing to report yet</b>Add your daily checklist, assignments and classes and this page will keep score.</div>'
       : issues === 0 ? '<div class="alert good"><b>You are on track</b>Nothing missing, nothing late, every class at or above goal.</div>'
       : `<div class="alert bad"><b>Needs your attention</b>${[m.length && `${m.length} missing`, late.length && `${late.length} turned in late`, bg.length && `${bg.length} class${bg.length > 1 ? 'es' : ''} below goal`].filter(Boolean).join(' · ')}</div>`;
-    return `${verdict}<div class="stats">
+    const week = ymd(addDays(new Date(), -7));
+    const lateWeek = late.filter(a => (a.doneAt || '').slice(0, 10) >= week).length;
+    const withGoal = S.classes.filter(c => c.goal != null && c.grade != null);
+    const weekDone = days.reduce((n, d) => n + dayStats(d).done, 0), weekTotal = days.reduce((n, d) => n + dayStats(d).total, 0);
+    const progress = {
+      grades: withGoal.length ? [`${withGoal.length - bg.length} of ${withGoal.length} classes at or above goal`, !bg.length] : ['Add your classes and goal grades to track this', null],
+      late: [lateWeek ? `${lateWeek} turned in late in the last 7 days` : 'Nothing turned in late in the last 7 days', !lateWeek],
+      missing: [m.length ? `${m.length} missing right now` : 'Nothing missing right now', !m.length],
+      habits: weekTotal ? [`${Math.round(weekDone / weekTotal * 100)}% of your daily checklist done this week`, weekDone / weekTotal >= 0.8] : ['Add a daily checklist to track this', null],
+      stress: [m.length + upcoming().filter(a => new Date(a.due) - new Date() < 48 * 3600e3).length ? `${m.length} missing and ${upcoming().filter(a => new Date(a.due) - new Date() < 48 * 3600e3).length} due in the next two days` : 'Nothing missing and nothing due in the next two days', !m.length]
+    };
+    const goalsCard = S.profile.goals.length || S.profile.goalText ? `<section class="card"><h2>Your goals</h2>
+      ${S.profile.goalText ? `<p class="sub">In your words: ${esc(S.profile.goalText)}</p>` : ''}
+      <ul class="list">${S.profile.goals.filter(g => GOALS[g]).map(g => `<li class="row"><div class="body"><span class="title">${GOALS[g].label}</span>
+        <span class="meta ${progress[g][1] === false ? 'bad' : ''}">${progress[g][0]}</span></div>${progress[g][1] == null ? '' : `<span class="badge ${progress[g][1] ? 'good' : 'bad'}">${progress[g][1] ? 'On track' : 'Off track'}</span>`}</li>`).join('')}</ul></section>` : '';
+    return `${verdict}${goalsCard}<div class="stats">
       <div class="stat"><b>${streak()}</b><span>Day streak</span></div>
       <div class="stat ${onTime != null && onTime < 80 ? 'bad' : 'good'}"><b>${onTime == null ? '—' : onTime + '%'}</b><span>Turned in on time</span></div>
       <div class="stat ${m.length ? 'bad' : ''}"><b>${m.length}</b><span>Missing now</span></div>
@@ -215,7 +279,9 @@ const views = {
       : perm === 'denied' ? 'Notifications are blocked. Allow them for this site in your phone settings.'
       : 'Notifications are off.';
     return `<section class="card"><h2>You</h2>
-        <label class="setting">Your name<input data-set="name" value="${esc(st.name)}" placeholder="Optional"></label></section>
+        <label class="setting">Your name<input data-set="name" value="${esc(st.name)}" placeholder="Optional"></label>
+        <p class="sub">${S.profile.done ? 'Your goals, your reason and the way RE-Mind talks to you.' : 'Tell RE-Mind your goals so it can motivate you.'}</p>
+        <button class="btn block" data-act="edit-profile">${S.profile.done ? 'Change my goals and answers' : 'Set up my profile'}</button></section>
       <section class="card"><h2>Reminders</h2><p class="sub">${permText}</p>
         <div class="btn-row"><button class="btn primary" data-act="enable-notif">${perm === 'granted' && st.notif ? 'Turn off' : 'Turn on notifications'}</button>
         <button class="btn" data-act="test-notif">Send a test</button></div>
@@ -323,7 +389,7 @@ function classSheet(c) {
     fields: [
       { name: 'name', label: 'Class name', value: c?.name, required: true, placeholder: 'e.g. Algebra 2' },
       { name: 'grade', label: 'Current grade (%)', type: 'number', value: c?.grade },
-      { name: 'goal', label: 'Goal grade (%)', type: 'number', value: c?.goal }
+      { name: 'goal', label: 'Goal grade (%)', type: 'number', value: c ? c.goal : S.profile.gradeGoal }
     ],
     onSave: d => {
       const grade = num(d.grade), goal = num(d.goal);
@@ -419,7 +485,7 @@ function quickGradesSheet() {
         const g = parseGradeLine(line);
         if (!g) continue;
         let c = S.classes.find(x => x.name.toLowerCase() === g.name.toLowerCase());
-        if (!c) { c = { id: uid(), name: g.name, grade: null, goal: null, history: [] }; S.classes.push(c); }
+        if (!c) { c = { id: uid(), name: g.name, grade: null, goal: S.profile.gradeGoal, history: [] }; S.classes.push(c); }
         if (g.grade != null && g.grade !== c.grade) { c.grade = g.grade; c.history.push({ date: ymd(), grade: g.grade }); }
         if (g.goal != null) c.goal = g.goal;
         n++;
@@ -483,7 +549,7 @@ function reviewGradesSheet(found) {
         const name = d['n' + i], grade = num(d['g' + i]);
         if (!name || grade == null) return;
         let c = S.classes.find(x => x.name.toLowerCase() === name.toLowerCase());
-        if (!c) { c = { id: uid(), name, grade: null, goal: null, history: [] }; S.classes.push(c); }
+        if (!c) { c = { id: uid(), name, grade: null, goal: S.profile.gradeGoal, history: [] }; S.classes.push(c); }
         if (grade !== c.grade) { c.grade = grade; c.history.push({ date: ymd(), grade }); }
         n++;
       });
@@ -563,6 +629,7 @@ const actions = {
   'add-class': () => classSheet(),
   'quick-assignments': () => quickAssignmentsSheet(),
   'quick-grades': () => quickGradesSheet(),
+  'edit-profile': () => startOnboarding(),
   'scan-grades': () => $('#grade-shots').click(),
   'edit-class': el => classSheet(byId(S.classes, el.dataset.id)),
   'seg': el => { schoolSeg = el.dataset.seg; },
@@ -723,7 +790,7 @@ async function show(title, body, tag) {
 function remind(key, title, body) {
   if (S.sent[key] || !canNotify()) return;
   S.sent[key] = Date.now();
-  show(title, S.settings.motivate ? `${body} ${quote()}` : body, key);
+  show(title, S.settings.motivate ? `${body} ${quote()}`.trim() : body, key);
 }
 const HOUR = 3600e3;
 const within = (t, now, ms = HOUR) => now >= t && now - t < ms;
@@ -736,7 +803,7 @@ function tick() {
   if (within(atTime(day, st.morning), now, 3 * HOUR)) {
     const due = upcoming().filter(a => a.due.slice(0, 10) === day).length;
     const parts = [s.total && `${s.total} on your daily checklist`, due && `${due} assignment${due > 1 ? 's' : ''} due today`, miss.length && `${miss.length} missing`].filter(Boolean);
-    remind(`morning|${day}`, 'Good morning from RE-Mind', parts.length ? parts.join(', ') + '.' : 'A clear day. Plan something worth doing.');
+    remind(`morning|${day}`, S.settings.name ? `Good morning, ${S.settings.name}` : 'Good morning from RE-Mind', parts.length ? parts.join(', ') + '.' : 'A clear day. Plan something worth doing.');
   }
   for (const i of s.left) if (i.time && within(atTime(day, i.time), now)) remind(`daily|${i.id}|${day}`, i.title, 'Time to tick this off your daily checklist.');
 
@@ -759,6 +826,83 @@ function tick() {
   if (Object.keys(S.sent).length !== before) save();
 }
 
+/* ---------- first-run setup ---------- */
+// Asks who the person is, what they want and why, then uses the answers for motivation,
+// default grade goals, the Report page and a starter daily checklist.
+let ob = null;
+const chips = (key, options) => `<div class="chips">${Object.entries(options).map(([k, v]) =>
+  `<button type="button" class="chip ${ob.draft[key].includes(k) ? 'on' : ''}" data-ob-chip="${key}" data-val="${k}" aria-pressed="${ob.draft[key].includes(k)}">${v.label}</button>`).join('')}</div>`;
+const OB_STEPS = [
+  () => `<h2>Welcome to RE-Mind</h2><p class="sub">A few quick questions so the app can keep you on track in a way that works for you. Your answers stay on this phone.</p>
+    <label class="field"><span>What should we call you?</span><input data-ob="name" value="${esc(ob.draft.name)}" maxlength="40" autocomplete="given-name" placeholder="Your first name"></label>`,
+  () => `<h2>${ob.draft.name ? esc(ob.draft.name) + ', what' : 'What'} do you want to get better at?</h2><p class="sub">Pick as many as you like.</p>${chips('goals', GOALS)}
+    <label class="field"><span>Or say it in your own words (optional)</span><input data-ob="goalText" value="${esc(ob.draft.goalText)}" maxlength="120" placeholder="e.g. Get a B or higher in every class"></label>`,
+  () => `<h2>Why does this matter to you?</h2><p class="sub">RE-Mind will remind you of this when you feel like skipping.</p>
+    <label class="field"><span>Your reason</span><input data-ob="why" value="${esc(ob.draft.why)}" maxlength="140" placeholder="e.g. Stay eligible for the team"></label>
+    <label class="field"><span>What grade are you aiming for in your classes? (%)</span><input data-ob="gradeGoal" type="number" min="0" max="100" inputmode="decimal" value="${ob.draft.gradeGoal ?? ''}" placeholder="e.g. 90"></label>`,
+  () => `<h2>What usually gets in your way?</h2><p class="sub">You will get tips aimed at these.</p>${chips('obstacles', OBSTACLES)}`,
+  () => `<h2>How should RE-Mind talk to you?</h2><div class="chips col">${Object.entries({
+      encouraging: ['Encouraging', 'Friendly pushes and positive reminders.'],
+      tough: ['Tough love', 'Blunt and direct. No sugar-coating.'],
+      facts: ['Just the facts', 'Only what is due and when. No pep talk.']
+    }).map(([k, [t, d]]) => `<button type="button" class="chip big ${ob.draft.tone === k ? 'on' : ''}" data-ob-tone="${k}" aria-pressed="${ob.draft.tone === k}"><b>${t}</b><small>${d}</small></button>`).join('')}</div>`,
+  () => {
+    const have = new Set(S.daily.map(i => i.title.toLowerCase()));
+    const ideas = [...new Set((ob.draft.goals.length ? ob.draft.goals : ['habits', 'late']).flatMap(g => STARTERS[g] || []))].filter(t => !have.has(t.toLowerCase()));
+    ob.ideas = ideas;
+    if (ob.draft.starters == null) ob.draft.starters = S.profile.done ? [] : ideas.slice(0, 3);  // only pre-pick on first run
+    return `<h2>Last step: your day</h2><p class="sub">When should RE-Mind check in with you?</p>
+      <label class="setting">Morning briefing<input type="time" data-ob="morning" value="${ob.draft.morning}"></label>
+      <label class="setting">Evening check-in<input type="time" data-ob="evening" value="${ob.draft.evening}"></label>
+      ${ideas.length ? `<p class="sub" style="margin-top:14px">Start your daily checklist with these? Tap to choose.</p>
+      <div class="chips col">${ideas.map(t => `<button type="button" class="chip ${ob.draft.starters.includes(t) ? 'on' : ''}" data-ob-starter="${esc(t)}" aria-pressed="${ob.draft.starters.includes(t)}">${esc(t)}</button>`).join('')}</div>` : ''}`;
+  }
+];
+function startOnboarding() {
+  ob = { step: 0, draft: { ...structuredClone(S.profile), name: S.settings.name, morning: S.settings.morning, evening: S.settings.evening, starters: null } };
+  renderOnboarding();
+}
+function renderOnboarding() {
+  const el = $('#onboard'), last = ob.step === OB_STEPS.length - 1;
+  el.hidden = false;
+  el.innerHTML = `<div class="ob-box"><div class="ob-dots">${OB_STEPS.map((_, i) => `<i class="${i <= ob.step ? 'on' : ''}"></i>`).join('')}</div>
+    <div class="ob-body">${OB_STEPS[ob.step]()}</div>
+    <div class="sheet-actions">${ob.step ? '<button class="btn ghost" data-ob-go="-1">Back</button>' : '<button class="btn ghost" data-ob-go="skip">Skip</button>'}
+    <span class="spacer"></span><button class="btn primary" data-ob-go="1">${last ? 'Finish' : 'Next'}</button></div></div>`;
+  el.scrollTop = 0;
+}
+function finishOnboarding(skipped) {
+  if (!skipped) {
+    const d = ob.draft;
+    S.settings.name = d.name.trim();
+    if (d.morning) S.settings.morning = d.morning;
+    if (d.evening) S.settings.evening = d.evening;
+    const g = d.gradeGoal === '' || d.gradeGoal == null || isNaN(+d.gradeGoal) ? null : +d.gradeGoal;
+    Object.assign(S.profile, { goals: d.goals, goalText: d.goalText.trim(), why: d.why.trim(), obstacles: d.obstacles, tone: d.tone, gradeGoal: g });
+    if (g != null) for (const c of S.classes) if (c.goal == null) c.goal = g;
+    for (const t of d.starters || []) S.daily.push({ id: uid(), created: ymd(), title: t, time: '' });
+  }
+  S.profile.done = true;
+  ob = null; $('#onboard').hidden = true;
+  save(); render(); tick();
+  if (!skipped) toast(S.settings.name ? `You are set, ${S.settings.name}. Let's go.` : 'You are set. Let\'s go.');
+}
+$('#onboard').addEventListener('input', e => { const k = e.target.dataset.ob; if (k) ob.draft[k] = e.target.value; });
+$('#onboard').addEventListener('click', e => {
+  const t = e.target.closest('button'); if (!t) return;
+  e.stopPropagation();
+  const toggle = (list, v) => list.includes(v) ? list.filter(x => x !== v) : [...list, v];
+  if (t.dataset.obChip) ob.draft[t.dataset.obChip] = toggle(ob.draft[t.dataset.obChip], t.dataset.val);
+  else if (t.dataset.obTone) ob.draft.tone = t.dataset.obTone;
+  else if (t.dataset.obStarter) ob.draft.starters = toggle(ob.draft.starters, t.dataset.obStarter);
+  else if (t.dataset.obGo === 'skip') return finishOnboarding(true);
+  else if (t.dataset.obGo) {
+    ob.step += +t.dataset.obGo;
+    if (ob.step >= OB_STEPS.length) return finishOnboarding(false);
+  }
+  renderOnboarding();
+});
+
 /* ---------- start ---------- */
 let lastDay = ymd();
 function refresh() {
@@ -767,6 +911,7 @@ function refresh() {
 }
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 render();
+if (!S.profile.done) startOnboarding();
 tick();
 autoSync();
 setInterval(refresh, 30e3);

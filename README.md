@@ -6,6 +6,7 @@ A mobile app (installable web app) that keeps you on top of school and your day.
 - **My checklist** for things you need to schedule, with a reminder at the date and time you pick.
 - **Assignments** with due dates, missing and late tracking, and import from a school calendar (.ics) feed.
 - **Grades** per class with a goal, trend, and a flag when you fall below goal.
+- **First-run setup** asks your name, goals, reason, obstacles and preferred tone, then uses the answers in reminders, default grade goals and the Report page.
 - **Report** page: streak, on-time rate, missing work, late log, grades below goal.
 
 ## Run it
