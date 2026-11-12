@@ -537,13 +537,35 @@ function parseGradesText(text) {
   }
   return out;
 }
+// A single class's grade page, as the Schoology phone app shows it: the class name in the
+// top bar, a "Course Grade" heading, then one row per grading period. Gives one result:
+// the class name with the grade from the first (overall) row.
+function parseCoursePage(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const at = lines.findIndex(l => /^\W*course\s+grade\W*$/i.test(l));
+  if (at < 1) return null;
+  let name = '';
+  for (let i = at - 1; i >= 0 && !name; i--) {
+    if (/^\W*\d{1,2}:\d{2}/.test(lines[i])) continue;                       // status bar clock
+    const t = lines[i].replace(/^[^A-Za-z0-9]+/, '')
+      .replace(/\s*:\s*\d[^:]*$/, '')                                       // section, e.g. ": 1(A)"
+      .replace(/[^A-Za-z0-9)]+$/, '').trim();
+    if ((t.match(/[A-Za-z]/g) || []).length >= 3) name = t;
+  }
+  if (!name) return null;
+  for (const l of lines.slice(at + 1)) {
+    const m = l.match(/\(\s*(\d{1,3}(?:\.\d{1,2})?)\s*%\s*\)\W*$/);
+    if (m && +m[1] <= 150 && /[A-F][+-]?\s*\(\s*[\d.]+\s*%\s*\)\W*$/.test(l)) return [{ name: name.slice(0, 120), grade: +m[1] }];
+  }
+  return null;
+}
 function reviewGradesSheet(found) {
   let n = 0;
   openSheet({
     title: `Found ${found.length} grade${found.length > 1 ? 's' : ''}`,
     fields: [],
     html: found.map((g, i) => `<div class="scan-row"><input name="n${i}" value="${esc(g.name)}" aria-label="Class name" maxlength="120"><input name="g${i}" type="number" min="0" max="150" step="0.01" inputmode="decimal" value="${g.grade}" aria-label="Grade"></div>`).join(''),
-    help: () => 'Check these against your screenshot and fix anything that was read wrong. Clear a name to leave that one out.',
+    help: () => 'Check these against your screenshots and fix anything that was read wrong. Clear a name to leave that one out.',
     onSave: d => {
       found.forEach((_, i) => {
         const name = d['n' + i], grade = num(d['g' + i]);
@@ -563,16 +585,18 @@ $('#grade-shots').addEventListener('change', async e => {
   const busy = $('#busy'), label = $('#busy-text');
   busy.hidden = false;
   try {
-    let text = '';
+    const found = [], seen = new Set();
     for (let i = 0; i < files.length; i++) {
       const which = files.length > 1 ? ` ${i + 1} of ${files.length}` : '';
       label.textContent = `Getting ready to read screenshot${which}…`;
-      text += '\n' + await readImageText(files[i], p => { label.textContent = `Reading screenshot${which}… ${Math.round(p * 100)}%`; });
+      const text = await readImageText(files[i], p => { label.textContent = `Reading screenshot${which}… ${Math.round(p * 100)}%`; });
+      for (const g of parseCoursePage(text) || parseGradesText(text)) {
+        if (!seen.has(g.name.toLowerCase())) { seen.add(g.name.toLowerCase()); found.push(g); }
+      }
     }
     busy.hidden = true;
-    const found = parseGradesText(text);
     if (found.length) reviewGradesSheet(found);
-    else alert('No grades were found in that screenshot.\n\nUse a screenshot where each class name and its percentage are both visible, and make sure it is not cropped or blurry.');
+    else alert('No grades were found.\n\nIn Schoology, open a class, tap Grades, and take a screenshot that shows the class name at the top and its percentage. Do that for each class, then pick all the screenshots at once.');
   } catch (err) {
     busy.hidden = true;
     alert(navigator.onLine ? 'That picture could not be read. Try a different screenshot.' : 'The first scan needs an internet connection to download the reader. Try again when you are online.');
