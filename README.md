@@ -22,7 +22,7 @@ In Settings, choose "Connect a school calendar", pick Schoology, Canvas, Google 
 
 Most school sites block a web page from reading their calendar link directly, so the app falls back to a small relay at `api/feed` (`src/worker.js`). The relay runs when the app is hosted on Cloudflare Workers, which `wrangler.jsonc` sets up: connect the repository in the Cloudflare dashboard and it deploys with `npx wrangler deploy`. On hosts without it (such as GitHub Pages), use the file import.
 
-Calendar links carry assignments and due dates only. Grades are entered by hand.
+Calendar links carry assignments and due dates only. For grades, use "Scan a screenshot" on the Grades tab: take a screenshot of your grades page and the app reads the class names and percentages for you to confirm. The reading happens on the device (files in `public/ocr/`), so screenshots are never uploaded. Assignments and grades can also be typed in, one per line, with "Type several".
 
 ## Put it on a phone
 

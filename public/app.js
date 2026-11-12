@@ -168,7 +168,8 @@ const views = {
       h += `<section class="card"><h2>Upcoming</h2>${u.length ? `<ul class="list">${u.map(assignmentRow).join('')}</ul>` : '<p class="empty">Nothing upcoming. Add an assignment or import your school calendar.</p>'}</section>`;
       if (d.length) h += `<section class="card"><h2>Turned in</h2><ul class="list">${d.map(assignmentRow).join('')}</ul></section>`;
     } else {
-      h += `<section class="card"><div class="card-head"><h2>Classes</h2><span><button class="btn small" data-act="quick-grades">Type several</button> <button class="btn small primary" data-act="add-class">+ Add</button></span></div>
+      h += `<section class="card"><div class="card-head"><h2>Classes</h2><button class="btn small" data-act="add-class">+ Add</button></div>
+        <div class="btn-row" style="margin:0 0 6px"><button class="btn primary" data-act="scan-grades">Scan a screenshot</button><button class="btn" data-act="quick-grades">Type several</button></div>
         ${S.classes.length ? `<ul class="list">${S.classes.map(c => {
           const prev = c.history && c.history.length > 1 ? c.history[c.history.length - 2].grade : null;
           const trend = prev == null || c.grade == null || prev === c.grade ? '' : c.grade > prev ? ` · ▲ up from ${prev}%` : ` · ▼ down from ${prev}%`;
@@ -250,7 +251,7 @@ function render() {
 
 /* ---------- sheet (add / edit forms) ---------- */
 let sheetCtx = null;
-function openSheet({ title, fields, onSave, onDelete, help, after }) {
+function openSheet({ title, fields, onSave, onDelete, help, after, html }) {
   sheetCtx = { onSave, onDelete, help, after };
   $('#sheet-title').textContent = title;
   $('#sheet-fields').innerHTML = fields.map(f => f.options
@@ -258,7 +259,7 @@ function openSheet({ title, fields, onSave, onDelete, help, after }) {
     : f.type === 'textarea' ? `<label class="field"><span>${esc(f.label)}</span><textarea name="${f.name}" rows="6" required placeholder="${esc(f.placeholder)}"></textarea></label>`
     : `<label class="field"><span>${esc(f.label)}</span>
     <input name="${f.name}" type="${f.type || 'text'}" value="${esc(f.value ?? '')}" ${f.required ? 'required' : ''}
-    ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''} ${f.type === 'number' ? 'min="0" max="150" step="0.1" inputmode="decimal"' : ''} ${f.type === 'text' || !f.type ? 'maxlength="120" autocomplete="off"' : ''}></label>`).join('') + '<p class="sub" id="sheet-help" style="margin:0 0 14px"></p>';
+    ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''} ${f.type === 'number' ? 'min="0" max="150" step="0.1" inputmode="decimal"' : ''} ${f.type === 'text' || !f.type ? 'maxlength="120" autocomplete="off"' : ''}></label>`).join('') + (html || '') + '<p class="sub" id="sheet-help" style="margin:0 0 14px"></p>';
   const showHelp = () => { $('#sheet-help').textContent = help ? help(Object.fromEntries(new FormData($('#sheet-form')))) : ''; };
   $('#sheet-fields').onchange = showHelp; showHelp();
   $('#sheet-delete').hidden = !onDelete;
@@ -428,6 +429,90 @@ function quickGradesSheet() {
   });
 }
 
+/* ---------- scan a screenshot of your grades ---------- */
+// The text is read on the phone itself (files in ocr/), so screenshots never leave the device.
+let ocrWorker = null;
+function loadScript(src) {
+  return new Promise((ok, fail) => { const el = document.createElement('script'); el.src = src; el.onload = ok; el.onerror = () => fail(new Error('load')); document.head.append(el); });
+}
+async function readImageText(file, onProgress) {
+  if (!window.Tesseract) await loadScript('ocr/tesseract.min.js');
+  const at = f => new URL('ocr/' + f, location.href).href;
+  ocrWorker ||= await Tesseract.createWorker('eng', 1, {
+    workerPath: at('worker.min.js'), corePath: at(''), langPath: at(''), gzip: true,
+    logger: m => { if (m.status === 'recognizing text') onProgress(m.progress); }
+  });
+  return (await ocrWorker.recognize(file)).data.text;
+}
+// Finds "class name ... 93.5%" pairs in the text of a grades page. The name can be on the
+// same line as the grade or on the line above it.
+function parseGradesText(text) {
+  const out = [], seen = new Set();
+  const NUM = '(\\d{1,3}(?:\\.\\d{1,2})?)';
+  const tidy = t => t.replace(/\b\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?\b/g, ' ')       // 45/50, 11/20
+    .replace(/\b\d{1,2}:\d{2}\b/g, ' ');                                          // 8:23
+  const nameOf = t => t.replace(/\(\s*\)/g, ' ').replace(/\b(overall|current|final|course)?\s*grade\b\s*:?/ig, ' ')
+    .replace(/(^|\s)[A-DF][+-]?(?=\s*$)/, ' ')                                      // trailing letter grade
+    .replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9)]+$/g, '').replace(/\s+/g, ' ').trim();
+  const isName = n => (n.match(/[A-Za-z]/g) || []).length >= 3 && !/^(grades?|grade report|gradebook|courses?|my grades)$/i.test(n);
+  let prev = '';
+  for (const raw of text.split('\n')) {
+    const line = tidy(raw).trim();
+    if (!line) continue;
+    let m = line.match(new RegExp(NUM + '\\s*%')) || line.match(new RegExp('\\(\\s*' + NUM + '\\s*\\)')) || (/\d\s*\/\s*\d/.test(raw) ? null : line.match(new RegExp('(?:^|\\s)' + NUM + '\\s*$')));  // a bare number only counts when the line has no 45/50 style score
+    const grade = m ? +m[1] : null;
+    if (grade == null || grade > 150) { prev = nameOf(line); continue; }
+    let name = nameOf(line.slice(0, m.index) + ' ' + line.slice(m.index + m[0].length));
+    if (!isName(name)) name = prev;
+    prev = '';
+    if (!isName(name) || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    out.push({ name: name.slice(0, 120), grade });
+  }
+  return out;
+}
+function reviewGradesSheet(found) {
+  let n = 0;
+  openSheet({
+    title: `Found ${found.length} grade${found.length > 1 ? 's' : ''}`,
+    fields: [],
+    html: found.map((g, i) => `<div class="scan-row"><input name="n${i}" value="${esc(g.name)}" aria-label="Class name" maxlength="120"><input name="g${i}" type="number" min="0" max="150" step="0.01" inputmode="decimal" value="${g.grade}" aria-label="Grade"></div>`).join(''),
+    help: () => 'Check these against your screenshot and fix anything that was read wrong. Clear a name to leave that one out.',
+    onSave: d => {
+      found.forEach((_, i) => {
+        const name = d['n' + i], grade = num(d['g' + i]);
+        if (!name || grade == null) return;
+        let c = S.classes.find(x => x.name.toLowerCase() === name.toLowerCase());
+        if (!c) { c = { id: uid(), name, grade: null, goal: null, history: [] }; S.classes.push(c); }
+        if (grade !== c.grade) { c.grade = grade; c.history.push({ date: ymd(), grade }); }
+        n++;
+      });
+    },
+    after: () => toast(n ? `Saved ${n} grade${n > 1 ? 's' : ''}` : 'Nothing saved')
+  });
+}
+$('#grade-shots').addEventListener('change', async e => {
+  const files = [...e.target.files]; e.target.value = '';
+  if (!files.length) return;
+  const busy = $('#busy'), label = $('#busy-text');
+  busy.hidden = false;
+  try {
+    let text = '';
+    for (let i = 0; i < files.length; i++) {
+      const which = files.length > 1 ? ` ${i + 1} of ${files.length}` : '';
+      label.textContent = `Getting ready to read screenshot${which}…`;
+      text += '\n' + await readImageText(files[i], p => { label.textContent = `Reading screenshot${which}… ${Math.round(p * 100)}%`; });
+    }
+    busy.hidden = true;
+    const found = parseGradesText(text);
+    if (found.length) reviewGradesSheet(found);
+    else alert('No grades were found in that screenshot.\n\nUse a screenshot where each class name and its percentage are both visible, and make sure it is not cropped or blurry.');
+  } catch (err) {
+    busy.hidden = true;
+    alert(navigator.onLine ? 'That picture could not be read. Try a different screenshot.' : 'The first scan needs an internet connection to download the reader. Try again when you are online.');
+  }
+});
+
 function connectSheet() {
   let feed;
   openSheet({
@@ -478,6 +563,7 @@ const actions = {
   'add-class': () => classSheet(),
   'quick-assignments': () => quickAssignmentsSheet(),
   'quick-grades': () => quickGradesSheet(),
+  'scan-grades': () => $('#grade-shots').click(),
   'edit-class': el => classSheet(byId(S.classes, el.dataset.id)),
   'seg': el => { schoolSeg = el.dataset.seg; },
   'go-school': () => { tab = 'school'; schoolSeg = 'assignments'; },
