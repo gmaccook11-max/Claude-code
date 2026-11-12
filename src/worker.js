@@ -26,13 +26,13 @@ async function feed(request) {
   try {
     // Follow redirects by hand so every hop is checked against the same rules.
     for (let hop = 0; hop < 4; hop++) {
-      res = await fetch(target, { redirect: 'manual', headers: { accept: 'text/calendar, text/plain;q=0.8' } });
+      res = await fetch(target, { redirect: 'manual', headers: { accept: 'text/calendar, text/plain;q=0.8, */*;q=0.5', 'user-agent': 'RE-Mind calendar sync' } });
       if (res.status < 300 || res.status >= 400) break;
       target = new URL(res.headers.get('location'), target);
       if (!allowed(target)) return fail(400, 'Redirected to a link that is not allowed');
     }
   } catch (e) { return fail(502, 'Could not reach the calendar'); }
-  if (!res.ok) return fail(502, 'The calendar link returned an error');
+  if (!res.ok) return fail(502, `School site answered ${res.status}`);
 
   const body = await res.text();
   if (body.length > MAX_BYTES) return fail(413, 'Calendar is too large');

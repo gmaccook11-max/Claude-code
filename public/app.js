@@ -163,12 +163,12 @@ const views = {
       <button class="${schoolSeg === 'grades' ? 'on' : ''}" data-act="seg" data-seg="grades">Grades</button></div>`;
     if (schoolSeg === 'assignments') {
       const m = missing(), u = upcoming(), d = turnedIn().slice(0, 20);
-      h += `<div class="btn-row" style="margin:0 0 14px"><button class="btn primary" data-act="add-assignment">+ Add assignment</button><button class="btn" data-act="school-sync">${S.feeds.length ? 'Sync school' : 'Connect school'}</button></div>`;
+      h += `<div class="btn-row" style="margin:0 0 14px"><button class="btn primary" data-act="add-assignment">+ Add</button><button class="btn" data-act="quick-assignments">Type several</button><button class="btn" data-act="school-sync">${S.feeds.length ? 'Sync school' : 'Connect school'}</button></div>`;
       if (m.length) h += `<section class="card"><h2>Missing <span class="badge bad">${m.length}</span></h2><ul class="list">${m.map(assignmentRow).join('')}</ul></section>`;
       h += `<section class="card"><h2>Upcoming</h2>${u.length ? `<ul class="list">${u.map(assignmentRow).join('')}</ul>` : '<p class="empty">Nothing upcoming. Add an assignment or import your school calendar.</p>'}</section>`;
       if (d.length) h += `<section class="card"><h2>Turned in</h2><ul class="list">${d.map(assignmentRow).join('')}</ul></section>`;
     } else {
-      h += `<section class="card"><div class="card-head"><h2>Classes</h2><button class="btn small primary" data-act="add-class">+ Add class</button></div>
+      h += `<section class="card"><div class="card-head"><h2>Classes</h2><span><button class="btn small" data-act="quick-grades">Type several</button> <button class="btn small primary" data-act="add-class">+ Add</button></span></div>
         ${S.classes.length ? `<ul class="list">${S.classes.map(c => {
           const prev = c.history && c.history.length > 1 ? c.history[c.history.length - 2].grade : null;
           const trend = prev == null || c.grade == null || prev === c.grade ? '' : c.grade > prev ? ` · ▲ up from ${prev}%` : ` · ▼ down from ${prev}%`;
@@ -255,6 +255,7 @@ function openSheet({ title, fields, onSave, onDelete, help, after }) {
   $('#sheet-title').textContent = title;
   $('#sheet-fields').innerHTML = fields.map(f => f.options
     ? `<label class="field"><span>${esc(f.label)}</span><select name="${f.name}">${f.options.map(([v, l]) => `<option value="${v}" ${v === f.value ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`
+    : f.type === 'textarea' ? `<label class="field"><span>${esc(f.label)}</span><textarea name="${f.name}" rows="6" required placeholder="${esc(f.placeholder)}"></textarea></label>`
     : `<label class="field"><span>${esc(f.label)}</span>
     <input name="${f.name}" type="${f.type || 'text'}" value="${esc(f.value ?? '')}" ${f.required ? 'required' : ''}
     ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''} ${f.type === 'number' ? 'min="0" max="150" step="0.1" inputmode="decimal"' : ''} ${f.type === 'text' || !f.type ? 'maxlength="120" autocomplete="off"' : ''}></label>`).join('') + '<p class="sub" id="sheet-help" style="margin:0 0 14px"></p>';
@@ -333,6 +334,100 @@ function classSheet(c) {
   });
 }
 
+/* ---------- quick add: type a list, one per line ---------- */
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+// Understands "tomorrow", "fri", "11/15", "nov 15", each with an optional time like "3pm".
+// Returns null when the text is not a date.
+function parseWhen(text, now = new Date()) {
+  let t = text.toLowerCase().replace(/\b(due|on|at|by)\b/g, ' ').replace(/[.,]/g, ' ').trim();
+  let h = 23, min = 59, hasTime = false;
+  t = t.replace(/\b(\d{1,2})(?::(\d\d))?\s*(am|pm)\b/, (_, hh, mm, ap) => {
+    h = (+hh % 12) + (ap === 'pm' ? 12 : 0); min = +(mm || 0); hasTime = true; return ' ';
+  }).replace(/\s+/g, ' ').trim();
+  const d = new Date(now); d.setHours(h, min, 0, 0);
+  let m;
+  if (t === '' && hasTime) { if (d < now) d.setDate(d.getDate() + 1); }
+  else if (t === 'today' || t === 'tonight') { /* today */ }
+  else if (t === 'tomorrow' || t === 'tmrw' || t === 'tmr') d.setDate(d.getDate() + 1);
+  else if ((m = t.match(/^(next )?(sun|mon|tue|wed|thu|fri|sat)[a-z]*$/)) && /^(sun|mon|tues?|wed(nes)?|thu(rs?)?|fri|sat(ur)?)(day)?$/.test(m[0].replace('next ', ''))) {
+    let add = (WEEKDAYS.indexOf(m[2]) - d.getDay() + 7) % 7;
+    if (m[1] && add < 7) add += add === 0 ? 7 : 0;
+    d.setDate(d.getDate() + add);
+  } else if ((m = t.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/)) || (m = t.match(/^([a-z]{3,9}) (\d{1,2})(?:st|nd|rd|th)?$/)) || (m = t.match(/^(\d{1,2})(?:st|nd|rd|th)? ([a-z]{3,9})$/))) {
+    let mon, day, year = m[3] ? +m[3] : null;
+    if (/^\d/.test(m[1]) && /^\d/.test(m[2])) { mon = +m[1] - 1; day = +m[2]; }
+    else { const name = /^\d/.test(m[1]) ? m[2] : m[1]; mon = MONTHS.indexOf(name.slice(0, 3)); day = +(/^\d/.test(m[1]) ? m[1] : m[2]); }
+    if (mon < 0 || mon > 11 || day < 1 || day > 31) return null;
+    if (year != null && year < 100) year += 2000;
+    d.setFullYear(year ?? now.getFullYear(), mon, day);
+    if (year == null && d < addDays(now, -60)) d.setFullYear(d.getFullYear() + 1);
+  } else return null;
+  return d;
+}
+// "Essay, English, Friday" or "Math worksheet tomorrow 3pm". Parts can be in any order.
+function parseAssignmentLine(line, now = new Date()) {
+  let parts = line.split(/[,;\t|]| - /).map(x => x.trim()).filter(Boolean);
+  if (!parts.length) return null;
+  let due = null;
+  const rest = [];
+  for (const part of parts) { const d = !due && parseWhen(part, now); d ? due = d : rest.push(part); }
+  if (!due && rest.length) {
+    const words = rest[rest.length - 1].split(/\s+/);
+    for (let n = Math.min(4, words.length - 1); n >= 1 && !due; n--) {
+      const d = parseWhen(words.slice(-n).join(' '), now);
+      if (d) { due = d; rest[rest.length - 1] = words.slice(0, -n).join(' ').replace(/\s+(due|on|by|at)$/i, ''); }
+    }
+  }
+  if (!rest.length || !rest[0]) return null;
+  if (!due) { due = addDays(now, 1); due.setHours(23, 59, 0, 0); }
+  return { title: rest[0].slice(0, 120), course: (rest[1] || '').slice(0, 120), due: localInput(due) };
+}
+// "Algebra 85" or "English 91 goal 95".
+function parseGradeLine(line) {
+  let goal = null;
+  let t = line.replace(/\bgoal\s*:?\s*(\d+(?:\.\d+)?)\s*%?/i, (_, g) => { goal = +g; return ' '; }).replace(/[%,:;=|-]+/g, ' ').trim();
+  const m = t.match(/^(.*\S)\s+(\d+(?:\.\d+)?)$/);
+  const name = (m ? m[1] : t).trim().slice(0, 120);
+  if (!name) return null;
+  return { name, grade: m ? +m[2] : null, goal };
+}
+function quickAssignmentsSheet() {
+  let n = 0;
+  openSheet({
+    title: 'Type your assignments',
+    fields: [{ name: 'lines', label: 'One per line: what it is, the class, and when it is due', type: 'textarea', placeholder: 'Essay, English, Friday\nMath worksheet tomorrow\nLab report, Biology, 11/20 3pm' }],
+    help: () => 'Leave out the day and it is set to tomorrow night. You can fix any of them afterwards.',
+    onSave: d => {
+      for (const line of d.lines.split('\n')) {
+        const a = parseAssignmentLine(line);
+        if (a) { S.assignments.push({ id: uid(), status: 'todo', late: false, source: 'manual', ...a }); n++; }
+      }
+    },
+    after: () => toast(n ? `Added ${n} assignment${n > 1 ? 's' : ''}` : 'Nothing to add')
+  });
+}
+function quickGradesSheet() {
+  let n = 0;
+  openSheet({
+    title: 'Type your grades',
+    fields: [{ name: 'lines', label: 'One class per line: the class, then your grade', type: 'textarea', placeholder: 'Algebra 85\nEnglish 91 goal 95\nBiology 78' }],
+    help: () => 'Open your grades in Schoology and copy the numbers across. Classes you already have are updated, not doubled.',
+    onSave: d => {
+      for (const line of d.lines.split('\n')) {
+        const g = parseGradeLine(line);
+        if (!g) continue;
+        let c = S.classes.find(x => x.name.toLowerCase() === g.name.toLowerCase());
+        if (!c) { c = { id: uid(), name: g.name, grade: null, goal: null, history: [] }; S.classes.push(c); }
+        if (g.grade != null && g.grade !== c.grade) { c.grade = g.grade; c.history.push({ date: ymd(), grade: g.grade }); }
+        if (g.goal != null) c.goal = g.goal;
+        n++;
+      }
+    },
+    after: () => toast(n ? `Saved ${n} class${n > 1 ? 'es' : ''}` : 'Nothing to add')
+  });
+}
+
 function connectSheet() {
   let feed;
   openSheet({
@@ -347,7 +442,13 @@ function connectSheet() {
       feed = S.feeds.find(f => f.url === url);
       if (!feed) { feed = { id: uid(), provider: d.provider, url }; S.feeds.push(feed); } else feed.provider = d.provider;
     },
-    after: () => syncAll(false, [feed])
+    after: async () => {
+      await syncAll(false, [feed]);
+      if (!feed.lastSync && feed.lastError) {
+        S.feeds = S.feeds.filter(f => f !== feed); save(); render();
+        alert(`RE-Mind could not use that link.\n\n${feed.lastError}\n\nYou can also skip the link: on the School tab, tap "Type several" and type your assignments in, one per line.`);
+      }
+    }
   });
 }
 
@@ -375,6 +476,8 @@ const actions = {
     toast(a.late ? 'Turned in late. It is on your record, but done counts.' : 'Turned in on time. Nice.');
   },
   'add-class': () => classSheet(),
+  'quick-assignments': () => quickAssignmentsSheet(),
+  'quick-grades': () => quickGradesSheet(),
   'edit-class': el => classSheet(byId(S.classes, el.dataset.id)),
   'seg': el => { schoolSeg = el.dataset.seg; },
   'go-school': () => { tab = 'school'; schoolSeg = 'assignments'; },
@@ -484,12 +587,21 @@ $('#ics-file').addEventListener('change', async e => {
 async function fetchFeed(url) {
   const get = async u => {
     const r = await fetch(u, { cache: 'no-store' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
     const t = await r.text();
-    if (!t.slice(0, 2000).includes('BEGIN:VCALENDAR')) throw new Error('Not a calendar');
+    if (!r.ok) throw Object.assign(new Error('HTTP ' + r.status), { status: r.status, detail: t.slice(0, 200) });
+    if (!t.slice(0, 2000).includes('BEGIN:VCALENDAR')) throw Object.assign(new Error('Not a calendar'), { status: 415 });
     return t;
   };
   try { return await get(url); } catch (e) { return await get('api/feed?url=' + encodeURIComponent(url)); }
+}
+// Turns a failed sync into a plain explanation of what went wrong and what to try.
+function explainSyncError(e) {
+  if (!navigator.onLine) return 'You are offline. It will try again later.';
+  if (e.status === 415) return 'That link opens a web page, not a calendar. Copy the calendar sharing link instead of the address of the page. In Schoology it usually has "ical" in it.';
+  if (e.status === 502) return `Your school site would not hand over the calendar${/\d{3}/.test(e.detail || '') ? ' (error ' + e.detail.match(/\d{3}/)[0] + ')' : ''}. Calendar sharing may be switched off, or the link has expired. Try copying a fresh link.`;
+  if (e.status === 400) return 'That does not look like a full link. It should start with https:// or webcal://.';
+  if (e.status === 404) return 'School sync is not available on this copy of the app.';
+  return 'The calendar could not be reached. Check your connection and try again.';
 }
 let syncing = false;
 async function syncAll(quiet, feeds = S.feeds) {
@@ -502,14 +614,13 @@ async function syncAll(quiet, feeds = S.feeds) {
     try {
       const r = importIcs(await fetchFeed(f.url), f);
       added += r.added; updated += r.updated; f.lastSync = Date.now(); f.lastError = '';
-    } catch (e) { failed++; f.lastError = navigator.onLine ? 'Could not read this link' : 'Offline, will retry'; }
+    } catch (e) { failed++; f.lastError = explainSyncError(e); }
   }
   syncing = false;
   save(); tick();
   if (!$('#sheet').open) render();
   if (quiet) { if (added) toast(`${added} new assignment${added > 1 ? 's' : ''} from school`); return; }
-  toast(failed ? 'That link could not be read from here. Download the calendar as a file and use "Import .ics file" instead.'
-    : `School synced: ${added} new, ${updated} updated`);
+  toast(failed ? 'School sync did not work. See Settings for the reason.' : `School synced: ${added} new, ${updated} updated`);
 }
 const autoSync = () => { if (navigator.onLine && S.feeds.some(f => Date.now() - (f.lastTry || 0) > HOUR)) syncAll(true); };
 
