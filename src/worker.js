@@ -1,9 +1,13 @@
 // RE-Mind on Cloudflare Workers. The app itself is served from ./public as static
-// assets; this script only answers /api/feed, the school calendar relay.
+// assets; this script answers /api/feed, the school calendar relay, and /api/push/*, the
+// background reminders (see push.js).
 //
 // School sites such as Schoology and Canvas do not let a web page read their calendar
 // links directly, so the app asks this relay to fetch the link for it. It only passes
 // through public https calendar (.ics) data and stores nothing.
+
+import { handlePush, Reminders } from './push.js';
+export { Reminders };
 
 const MAX_BYTES = 2 * 1024 * 1024;
 
@@ -45,6 +49,7 @@ export default {
   async fetch(request, env) {
     const { pathname } = new URL(request.url);
     if (pathname === '/api/feed' && request.method === 'GET') return feed(request);
+    if (pathname.startsWith('/api/push/')) return handlePush(request, env);
     return env.ASSETS.fetch(request);
   }
 };

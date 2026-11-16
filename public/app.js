@@ -90,7 +90,7 @@ const PROVIDERS = {
 /* ---------- state ---------- */
 const KEY = 'remind.v1';
 const DEFAULTS = {
-  daily: [], dailyLog: {}, tasks: [], assignments: [], classes: [], feeds: [], sent: {}, acked: {},
+  daily: [], dailyLog: {}, tasks: [], assignments: [], classes: [], feeds: [], sent: {}, acked: {}, push: { device: '' },
   profile: { done: false, goals: [], goalText: '', why: '', obstacles: [], gradeGoal: null, tone: 'encouraging' },
   settings: { name: '', notif: false, morning: '07:30', evening: '20:00', nagMins: 30, motivate: true, callouts: true }
 };
@@ -104,10 +104,12 @@ function load() {
   const s = { ...structuredClone(DEFAULTS), ...saved };
   s.settings = { ...DEFAULTS.settings, ...(saved.settings || {}) };
   s.profile = { ...DEFAULTS.profile, ...(saved.profile || {}) };
+  s.push = { ...DEFAULTS.push, ...(saved.push || {}) };
   return s;
 }
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Could not save on this device'); }
+  queuePushSync();
 }
 
 /* ---------- derived data ---------- */
@@ -335,7 +337,9 @@ const views = {
     const st = S.settings;
     const perm = !('Notification' in window) ? 'unsupported' : Notification.permission;
     const permText = perm === 'unsupported' ? 'This browser cannot show notifications. On iPhone, add RE-Mind to your Home Screen first.'
-      : perm === 'granted' && st.notif ? 'Notifications are on.'
+      : perm === 'granted' && st.notif ? (pushStatus === 'on' ? 'Notifications are on, and reminders arrive even when the app is closed.'
+        : pushStatus === 'starting' ? 'Notifications are on. Setting up reminders for when the app is closed…'
+        : 'Notifications are on, but only while the app is open. Reminders for when the app is closed could not be set up on this device.')
       : perm === 'denied' ? 'Notifications are blocked. Allow them for this site in your phone settings.'
       : 'Notifications are off.';
     return `<section class="card"><h2>You</h2>
@@ -723,14 +727,21 @@ const actions = {
   'go-school': () => { tab = 'school'; schoolSeg = 'assignments'; },
   'enable-notif': async () => {
     if (!('Notification' in window)) return toast('Notifications are not available here. On iPhone, add the app to your Home Screen first.');
-    if (S.settings.notif && Notification.permission === 'granted') { S.settings.notif = false; return; }
+    if (S.settings.notif && Notification.permission === 'granted') { S.settings.notif = false; return stopPush(); }
     const p = await Notification.requestPermission();
     S.settings.notif = p === 'granted';
     toast(S.settings.notif ? 'Notifications on' : 'Notifications were not allowed');
     save(); render();
+    if (S.settings.notif) { await syncPush(); render(); }
   },
   'test-notif': async () => {
     if (!canNotify()) return toast('Turn on notifications first');
+    if (pushStatus === 'on' && pushSub) {
+      try {
+        const r = await fetch('api/push/test', { method: 'POST', body: JSON.stringify({ device: S.push.device, subscription: pushSub, delay: 15, body: 'Background reminders are working. ' + quote() }) });
+        if (r.ok) return alert('A test reminder will arrive in 15 seconds.\n\nClose RE-Mind now to check that it reaches you while the app is closed.');
+      } catch (e) { /* fall back to a local test */ }
+    }
     await show('RE-Mind test', 'This is what a reminder looks like. ' + quote(), 'test');
     toast('Test sent');
   },
@@ -746,8 +757,9 @@ const actions = {
     a.href = URL.createObjectURL(new Blob([JSON.stringify(S, null, 2)], { type: 'application/json' }));
     a.download = `re-mind-backup-${ymd()}.json`; a.click(); URL.revokeObjectURL(a.href);
   },
-  'reset': () => {
+  'reset': async () => {
     if (!confirm('Erase all RE-Mind data on this device? This cannot be undone.')) return;
+    await stopPush();
     S = structuredClone(DEFAULTS);
   }
 };
@@ -915,6 +927,102 @@ function tick() {
   if (Object.keys(S.sent).length !== before) save();
 }
 
+/* ---------- reminders while the app is closed ---------- */
+// The phone only runs this app's code while it is open, so the list of upcoming reminders
+// is uploaded to the app's server (src/push.js), which sends each one as a push message at
+// the right time. The list is rebuilt and re-uploaded whenever anything changes.
+let pushStatus = 'off', pushSub = null, pushTimer = null;
+const fromB64u = str => Uint8Array.from(atob(str.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+const toB64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+// Every reminder due in the next two weeks, assuming nothing else gets ticked off before then.
+function buildSchedule(days = 14) {
+  const out = [], now = Date.now(), st = S.settings;
+  const add = (tag, at, title, body, plain) => {
+    at = +at;
+    if (at > now + 20e3 && !S.sent[tag]) out.push({ at, tag, title, body: st.motivate && !plain ? `${body} ${quote()}`.trim() : body });
+  };
+  const todo = S.assignments.filter(a => a.status === 'todo');
+  const plural = (n, word) => `${n} ${word}${n > 1 ? 's' : ''}`;
+  const who = st.name ? `${st.name}, ` : '';
+
+  for (let d = 0; d < days; d++) {
+    const day = ymd(addDays(new Date(), d));
+    const left = d === 0 ? dayStats(day).left : S.daily;          // later days: nothing ticked yet
+    const total = d === 0 ? dayStats(day).total : S.daily.length;
+
+    const mAt = atTime(day, st.morning);
+    const due = todo.filter(a => a.due.slice(0, 10) === day && new Date(a.due) > mAt).length;
+    const missed = todo.filter(a => new Date(a.due) < mAt).length;
+    const parts = [total && `${total} on your daily checklist`, due && `${plural(due, 'assignment')} due today`, missed && `${missed} missing`].filter(Boolean);
+    add(`morning|${day}`, mAt, st.name ? `Good morning, ${st.name}` : 'Good morning from RE-Mind', parts.length ? parts.join(', ') + '.' : 'A clear day. Plan something worth doing.');
+
+    for (const i of left) if (i.time) add(`daily|${i.id}|${day}`, atTime(day, i.time), i.title, 'Time to tick this off your daily checklist.');
+
+    if (left.length) {
+      const eve = +atTime(day, st.evening);
+      for (let slot = 0; slot < (st.nagMins ? 8 : 1); slot++) {
+        const at = eve + slot * st.nagMins * 60e3;
+        if (ymd(new Date(at)) !== day) break;
+        add(`evening|${day}|${slot}`, at, `${plural(left.length, 'thing')} still not done today`, left.map(i => i.title).join(', ') + '.');
+      }
+    }
+
+    if (st.callouts) {
+      const cAt = atTime(day, '16:00'), miss = todo.filter(a => new Date(a.due) < cAt).sort((a, b) => a.due.localeCompare(b.due));
+      if (miss.length) add(`callout|missing|${day}|${miss.length}`, cAt, `${who}${plural(miss.length, 'assignment')} not turned in`,
+        (miss.slice(0, 3).map(a => a.title).join(', ') + (miss.length > 3 ? ` and ${miss.length - 3} more` : '') + '. ' +
+        (S.profile.tone === 'tough' ? 'Every day you wait it gets worse. Pick one and finish it now.' : S.profile.tone === 'facts' ? '' : 'Turn one in today, even late. Late beats a zero.')).trim(), true);
+    }
+  }
+
+  for (const t of S.tasks) if (!t.done && t.date && t.time) add(`task|${t.id}|${t.date}|${t.time}`, atTime(t.date, t.time), t.title, 'You scheduled this for now.');
+
+  for (const a of todo) {
+    const due = +new Date(a.due), course = a.course ? ' for ' + a.course : '';
+    add(`a24|${a.id}|${a.due}`, due - 24 * HOUR, `Due tomorrow: ${a.title}`, `Due ${fmtDay(a.due.slice(0, 10))} at ${fmtTime(a.due.slice(11, 16))}${course}.`);
+    add(`a2|${a.id}|${a.due}`, due - 2 * HOUR, `Due soon: ${a.title}`, `Due at ${fmtTime(a.due.slice(11, 16))}${course}.`);
+    add(`gone|${a.id}|${a.due}`, due + 60e3, `${who}you missed: ${a.title}`, `It was due at ${fmtTime(a.due.slice(11, 16))}${course} and is not turned in. Turn it in late today.`, true);
+  }
+  return out.sort((a, b) => a.at - b.at).slice(0, 250);
+}
+
+async function syncPush() {
+  clearTimeout(pushTimer); pushTimer = null;
+  if (!canNotify() || !('serviceWorker' in navigator) || !('PushManager' in window)) { pushStatus = 'off'; return; }
+  try {
+    if (!pushSub) {
+      pushStatus = 'starting';
+      const reg = await navigator.serviceWorker.ready;
+      if (!S.push.device) { S.push.device = [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join(''); save(); clearTimeout(pushTimer); pushTimer = null; }
+      const res = await fetch('api/push/key?device=' + S.push.device, { cache: 'no-store' });
+      if (!res.ok) throw new Error('no server');
+      const { key } = await res.json();
+      let sub = await reg.pushManager.getSubscription();
+      if (sub && toB64u(sub.options.applicationServerKey) !== key) { await sub.unsubscribe(); sub = null; }   // made for an older key
+      sub ||= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: fromB64u(key) });
+      pushSub = sub.toJSON();
+    }
+    const res = await fetch('api/push/schedule', { method: 'POST', body: JSON.stringify({ device: S.push.device, subscription: pushSub, reminders: buildSchedule() }) });
+    if (!res.ok) throw new Error('schedule ' + res.status);
+    pushStatus = 'on';
+  } catch (e) { pushStatus = 'error'; pushSub = null; }
+}
+// Called on every save, so the server's list never falls behind what is on the phone.
+function queuePushSync() {
+  if (pushTimer || !S.settings.notif) return;
+  pushTimer = setTimeout(async () => { const before = pushStatus; await syncPush(); if (before !== pushStatus && tab === 'settings' && !$('#sheet').open) render(); }, 3000);
+}
+async function stopPush() {
+  clearTimeout(pushTimer); pushTimer = null;
+  try {
+    if (S.push.device) await fetch('api/push/off', { method: 'POST', body: JSON.stringify({ device: S.push.device }) });
+    const sub = await (await navigator.serviceWorker?.getRegistration())?.pushManager?.getSubscription();
+    await sub?.unsubscribe();
+  } catch (e) { /* nothing to undo */ }
+  pushSub = null; pushStatus = 'off';
+}
+
 /* ---------- first-run setup ---------- */
 // Asks who the person is, what they want and why, then uses the answers for motivation,
 // default grade goals, the Report page and a starter daily checklist.
@@ -996,12 +1104,13 @@ $('#onboard').addEventListener('click', e => {
 let lastDay = ymd();
 function refresh() {
   if (ymd() !== lastDay || tab === 'today') { lastDay = ymd(); if (!$('#sheet').open) render(); }
-  tick(); autoSync();
+  tick(); autoSync(); queuePushSync();
 }
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 render();
 if (!S.profile.done) startOnboarding();
 tick();
 autoSync();
+queuePushSync();
 setInterval(refresh, 30e3);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });

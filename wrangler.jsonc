@@ -3,5 +3,8 @@
   "main": "src/worker.js",
   "compatibility_date": "2025-06-01",
   "workers_dev": true,
-  "assets": { "directory": "./public", "binding": "ASSETS" }
+  "assets": { "directory": "./public", "binding": "ASSETS" },
+  // Background reminders: one small storage object per phone (see src/push.js).
+  "durable_objects": { "bindings": [{ "name": "REMINDERS", "class_name": "Reminders" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Reminders"] }]
 }

@@ -1,4 +1,4 @@
-const CACHE = 're-mind-v2';
+const CACHE = 're-mind-v3';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-180.png'];
 
 self.addEventListener('install', e => {
@@ -18,6 +18,15 @@ self.addEventListener('fetch', e => {
       return res;
     }).catch(() => caches.match(e.request, { ignoreSearch: true }).then(r => r || caches.match('index.html')))
   );
+});
+
+// Reminders sent by the server while the app is closed (see src/push.js).
+self.addEventListener('push', e => {
+  let data = {};
+  try { data = e.data.json(); } catch (err) { /* show a generic reminder */ }
+  e.waitUntil(self.registration.showNotification(data.title || 'RE-Mind', {
+    body: data.body || 'Open RE-Mind to see what needs doing.', tag: data.tag || 'remind', icon: 'icons/icon-192.png', badge: 'icons/icon-192.png'
+  }));
 });
 
 self.addEventListener('notificationclick', e => {

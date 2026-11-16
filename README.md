@@ -18,6 +18,10 @@ No build step. The app lives in `public/`. Serve it over HTTP and open it:
 python3 -m http.server 8000 --directory public
 ```
 
+## Reminders while the app is closed
+
+A phone only runs the app's code while it is open, so the app uploads its list of upcoming reminders (the next two weeks) to the Worker. A Durable Object per phone (`src/push.js`) wakes at each reminder time and sends it as a Web Push message. Each phone's signing key is created on first use and kept in that object's storage, so there are no secrets to set up. On iPhone this needs iOS 16.4 or later and the app added to the Home Screen.
+
 ## School data
 
 In Settings, choose "Connect a school calendar", pick Schoology, Canvas, Google Classroom or Other, and paste the calendar link from your school system. RE-Mind then syncs assignments each time it opens. Any system that can export an .ics file also works through "Import .ics file".
