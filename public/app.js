@@ -79,6 +79,14 @@ function quote() {
   return pick(tough ? TOUGH : QUOTES);
 }
 
+/* ---------- iPhone app ---------- */
+// The same code runs as the iPhone app (Capacitor, see ios/). There it schedules reminders
+// on the phone itself and reaches this app's server by its full address.
+const NATIVE = !!window.Capacitor?.isNativePlatform?.();
+const LN = NATIVE ? window.Capacitor.Plugins.LocalNotifications : null;
+const API = NATIVE ? 'https://appp.gmaccook11.workers.dev/' : '';
+let nativePerm = 'prompt';
+
 /* ---------- school systems ---------- */
 const PROVIDERS = {
   schoology: { name: 'Schoology', steps: 'On the Schoology website (not the phone app), open Calendar and choose Export or Share. You can also find it under Settings, Account Settings, "Share your Schoology calendar". Turn sharing on and copy the link it gives you.' },
@@ -90,7 +98,7 @@ const PROVIDERS = {
 /* ---------- state ---------- */
 const KEY = 'remind.v1';
 const DEFAULTS = {
-  daily: [], dailyLog: {}, tasks: [], assignments: [], classes: [], feeds: [], sent: {}, acked: {}, push: { device: '' },
+  daily: [], dailyLog: {}, tasks: [], assignments: [], classes: [], feeds: [], sent: {}, acked: {}, planned: {}, push: { device: '' },
   profile: { done: false, goals: [], goalText: '', why: '', obstacles: [], gradeGoal: null, tone: 'encouraging' },
   settings: { name: '', notif: false, morning: '07:30', evening: '20:00', nagMins: 30, motivate: true, callouts: true }
 };
@@ -107,10 +115,10 @@ function load() {
   s.push = { ...DEFAULTS.push, ...(saved.push || {}) };
   return s;
 }
-function save() {
+function persist() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Could not save on this device'); }
-  queuePushSync();
 }
+function save() { persist(); queuePushSync(); }
 
 /* ---------- derived data ---------- */
 const dailyFor = day => S.daily.filter(i => i.created <= day);
@@ -335,8 +343,10 @@ const views = {
 
   settings() {
     const st = S.settings;
-    const perm = !('Notification' in window) ? 'unsupported' : Notification.permission;
-    const permText = perm === 'unsupported' ? 'This browser cannot show notifications. On iPhone, add RE-Mind to your Home Screen first.'
+    const perm = NATIVE ? (nativePerm === 'prompt-with-rationale' ? 'prompt' : nativePerm) : !('Notification' in window) ? 'unsupported' : Notification.permission;
+    const permText = NATIVE && perm === 'granted' && st.notif ? (pushStatus === 'error' ? 'Notifications are on, but reminders could not be scheduled. Try turning them off and on again.' : 'Notifications are on. Reminders arrive even when the app is closed.')
+      : NATIVE && perm === 'denied' ? 'Notifications are blocked. Turn them on in the iPhone Settings app, under RE-Mind.'
+      : perm === 'unsupported' ? 'This browser cannot show notifications. On iPhone, add RE-Mind to your Home Screen first.'
       : perm === 'granted' && st.notif ? (pushStatus === 'on' ? 'Notifications are on, and reminders arrive even when the app is closed.'
         : pushStatus === 'starting' ? 'Notifications are on. Setting up reminders for when the app is closed…'
         : 'Notifications are on, but only while the app is open. Reminders for when the app is closed could not be set up on this device.')
@@ -366,7 +376,8 @@ const views = {
         <button class="btn block" data-act="import-file">Import .ics file</button>
         <p class="sub" style="margin-top:10px">Calendar links carry assignments and due dates, not grades. Enter grades under School, Grades.</p></section>
       <section class="card"><h2>Your data</h2><p class="sub">Everything is stored only on this device.</p>
-        <div class="btn-row"><button class="btn" data-act="export">Export backup</button><button class="btn danger" data-act="reset">Erase everything</button></div></section>`;
+        <div class="btn-row"><button class="btn" data-act="export">Export backup</button><button class="btn danger" data-act="reset">Erase everything</button></div>
+        <p class="sub" style="margin-top:10px"><a href="${API}privacy.html" target="_blank" rel="noopener">Privacy policy</a></p></section>`;
   }
 };
 
@@ -726,6 +737,15 @@ const actions = {
   'seg': el => { schoolSeg = el.dataset.seg; },
   'go-school': () => { tab = 'school'; schoolSeg = 'assignments'; },
   'enable-notif': async () => {
+    if (NATIVE) {
+      if (S.settings.notif && nativePerm === 'granted') { S.settings.notif = false; return stopPush(); }
+      nativePerm = (await LN.requestPermissions()).display;
+      S.settings.notif = nativePerm === 'granted';
+      toast(S.settings.notif ? 'Notifications on' : 'Notifications were not allowed. You can turn them on in the iPhone Settings app.');
+      save(); render();
+      if (S.settings.notif) { await syncPush(); render(); }
+      return;
+    }
     if (!('Notification' in window)) return toast('Notifications are not available here. On iPhone, add the app to your Home Screen first.');
     if (S.settings.notif && Notification.permission === 'granted') { S.settings.notif = false; return stopPush(); }
     const p = await Notification.requestPermission();
@@ -736,9 +756,13 @@ const actions = {
   },
   'test-notif': async () => {
     if (!canNotify()) return toast('Turn on notifications first');
+    if (NATIVE) {
+      await LN.schedule({ notifications: [{ id: 1, title: 'RE-Mind test', body: 'Reminders are working. ' + quote(), schedule: { at: new Date(Date.now() + 10e3), allowWhileIdle: true } }] });
+      return alert('A test reminder will arrive in 10 seconds.\n\nClose RE-Mind now to check that it reaches you while the app is closed.');
+    }
     if (pushStatus === 'on' && pushSub) {
       try {
-        const r = await fetch('api/push/test', { method: 'POST', body: JSON.stringify({ device: S.push.device, subscription: pushSub, delay: 15, body: 'Background reminders are working. ' + quote() }) });
+        const r = await fetch(API + 'api/push/test', { method: 'POST', body: JSON.stringify({ device: S.push.device, subscription: pushSub, delay: 15, body: 'Background reminders are working. ' + quote() }) });
         if (r.ok) return alert('A test reminder will arrive in 15 seconds.\n\nClose RE-Mind now to check that it reaches you while the app is closed.');
       } catch (e) { /* fall back to a local test */ }
     }
@@ -752,7 +776,15 @@ const actions = {
   'remove-feed': el => {
     if (confirm('Remove this school connection? Assignments already imported stay in the app.')) S.feeds = S.feeds.filter(f => f.id !== el.dataset.id);
   },
-  'export': () => {
+  'export': async () => {
+    const name = `re-mind-backup-${ymd()}.json`, data = JSON.stringify(S, null, 2);
+    if (NATIVE) {
+      const file = new File([data], name, { type: 'application/json' });
+      try {
+        if (navigator.canShare?.({ files: [file] })) return await navigator.share({ files: [file], title: 'RE-Mind backup' });
+        await navigator.clipboard.writeText(data); return toast('Backup copied. Paste it into Notes to keep it.');
+      } catch (e) { return; }
+    }
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([JSON.stringify(S, null, 2)], { type: 'application/json' }));
     a.download = `re-mind-backup-${ymd()}.json`; a.click(); URL.revokeObjectURL(a.href);
@@ -844,7 +876,7 @@ async function fetchFeed(url) {
     if (!t.slice(0, 2000).includes('BEGIN:VCALENDAR')) throw Object.assign(new Error('Not a calendar'), { status: 415 });
     return t;
   };
-  try { return await get(url); } catch (e) { return await get('api/feed?url=' + encodeURIComponent(url)); }
+  try { return await get(url); } catch (e) { return await get(API + 'api/feed?url=' + encodeURIComponent(url)); }
 }
 // Turns a failed sync into a plain explanation of what went wrong and what to try.
 function explainSyncError(e) {
@@ -877,8 +909,11 @@ async function syncAll(quiet, feeds = S.feeds) {
 const autoSync = () => { if (navigator.onLine && S.feeds.some(f => Date.now() - (f.lastTry || 0) > HOUR)) syncAll(true); };
 
 /* ---------- reminders ---------- */
-const canNotify = () => 'Notification' in window && Notification.permission === 'granted' && S.settings.notif;
+const canNotify = () => NATIVE ? nativePerm === 'granted' && S.settings.notif : 'Notification' in window && Notification.permission === 'granted' && S.settings.notif;
+// Notification ids on iPhone are whole numbers, so each reminder's tag is turned into one.
+const nid = tag => { let h = 7; for (const c of String(tag)) h = (h * 31 + c.charCodeAt(0)) | 0; return (Math.abs(h) % 2000000000) + 10; };
 async function show(title, body, tag) {
+  if (NATIVE) { try { await LN.schedule({ notifications: [{ id: nid(tag + '|now'), title, body }] }); } catch (e) { /* not allowed */ } return; }
   const opts = { body, tag, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png' };
   try {
     const reg = await navigator.serviceWorker?.getRegistration();
@@ -888,6 +923,7 @@ async function show(title, body, tag) {
 }
 function remind(key, title, body, plain) {
   if (S.sent[key] || !canNotify()) return;
+  if (pushStatus === 'on' && S.planned[key] && S.planned[key] <= Date.now()) { S.sent[key] = Date.now(); return; }   // already delivered in the background
   S.sent[key] = Date.now();
   show(title, S.settings.motivate && !plain ? `${body} ${quote()}`.trim() : body, key);
 }
@@ -987,15 +1023,35 @@ function buildSchedule(days = 14) {
   return out.sort((a, b) => a.at - b.at).slice(0, 250);
 }
 
+// Remembers which reminders were handed off, so the app does not show them again when opened.
+function notePlanned(list) {
+  const now = Date.now(), keep = {};
+  for (const [k, at] of Object.entries(S.planned || {})) if (at <= now && now - at < 2 * 24 * HOUR) keep[k] = at;
+  for (const r of list) keep[r.tag] = r.at;
+  S.planned = keep; persist();
+}
+// iPhone app: iOS keeps at most 64 scheduled notifications per app, so the next 60 are
+// scheduled on the phone and the list is refreshed every time the app is used.
+async function syncLocal() {
+  const pending = (await LN.getPending()).notifications || [];
+  if (pending.length) await LN.cancel({ notifications: pending.map(n => ({ id: n.id })) });
+  if (!canNotify()) { pushStatus = 'off'; return; }
+  const seen = new Set(), list = buildSchedule().filter(r => { const id = nid(r.tag); if (seen.has(id)) return false; seen.add(id); return true; }).slice(0, 60);
+  if (list.length) await LN.schedule({ notifications: list.map(r => ({ id: nid(r.tag), title: r.title, body: r.body, schedule: { at: new Date(r.at), allowWhileIdle: true } })) });
+  notePlanned(list);
+  pushStatus = 'on';
+}
+
 async function syncPush() {
   clearTimeout(pushTimer); pushTimer = null;
+  if (NATIVE) { try { await syncLocal(); } catch (e) { pushStatus = 'error'; } return; }
   if (!canNotify() || !('serviceWorker' in navigator) || !('PushManager' in window)) { pushStatus = 'off'; return; }
   try {
     if (!pushSub) {
       pushStatus = 'starting';
       const reg = await navigator.serviceWorker.ready;
       if (!S.push.device) { S.push.device = [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join(''); save(); clearTimeout(pushTimer); pushTimer = null; }
-      const res = await fetch('api/push/key?device=' + S.push.device, { cache: 'no-store' });
+      const res = await fetch(API + 'api/push/key?device=' + S.push.device, { cache: 'no-store' });
       if (!res.ok) throw new Error('no server');
       const { key } = await res.json();
       let sub = await reg.pushManager.getSubscription();
@@ -1003,20 +1059,23 @@ async function syncPush() {
       sub ||= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: fromB64u(key) });
       pushSub = sub.toJSON();
     }
-    const res = await fetch('api/push/schedule', { method: 'POST', body: JSON.stringify({ device: S.push.device, subscription: pushSub, reminders: buildSchedule() }) });
+    const list = buildSchedule();
+    const res = await fetch(API + 'api/push/schedule', { method: 'POST', body: JSON.stringify({ device: S.push.device, subscription: pushSub, reminders: list }) });
     if (!res.ok) throw new Error('schedule ' + res.status);
+    notePlanned(list);
     pushStatus = 'on';
   } catch (e) { pushStatus = 'error'; pushSub = null; }
 }
 // Called on every save, so the server's list never falls behind what is on the phone.
 function queuePushSync() {
-  if (pushTimer || !S.settings.notif) return;
+  if (pushTimer || (!S.settings.notif && !NATIVE)) return;
   pushTimer = setTimeout(async () => { const before = pushStatus; await syncPush(); if (before !== pushStatus && tab === 'settings' && !$('#sheet').open) render(); }, 3000);
 }
 async function stopPush() {
   clearTimeout(pushTimer); pushTimer = null;
+  if (NATIVE) { try { await syncLocal(); } catch (e) { /* nothing scheduled */ } pushStatus = 'off'; return; }
   try {
-    if (S.push.device) await fetch('api/push/off', { method: 'POST', body: JSON.stringify({ device: S.push.device }) });
+    if (S.push.device) await fetch(API + 'api/push/off', { method: 'POST', body: JSON.stringify({ device: S.push.device }) });
     const sub = await (await navigator.serviceWorker?.getRegistration())?.pushManager?.getSubscription();
     await sub?.unsubscribe();
   } catch (e) { /* nothing to undo */ }
@@ -1106,7 +1165,11 @@ function refresh() {
   if (ymd() !== lastDay || tab === 'today') { lastDay = ymd(); if (!$('#sheet').open) render(); }
   tick(); autoSync(); queuePushSync();
 }
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+if (!NATIVE && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+if (NATIVE) {
+  document.documentElement.classList.add('native');
+  LN.checkPermissions().then(r => { nativePerm = r.display; if (nativePerm !== 'granted' && S.settings.notif) { S.settings.notif = false; persist(); } render(); queuePushSync(); }).catch(() => {});
+}
 render();
 if (!S.profile.done) startOnboarding();
 tick();
