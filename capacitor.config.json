@@ -1,0 +1,10 @@
+{
+  "appId": "com.gmaccook11.remind",
+  "appName": "RE-Mind",
+  "webDir": "public",
+  "ios": { "contentInset": "never" },
+  "plugins": {
+    "CapacitorHttp": { "enabled": true },
+    "LocalNotifications": { "iconColor": "#4f46e5" }
+  }
+}
